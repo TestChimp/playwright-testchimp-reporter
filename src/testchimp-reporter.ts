@@ -204,26 +204,17 @@ export class TestChimpReporter implements Reporter {
     finalStatus?: SmartTestExecutionStatus,
     finalError?: string
   ): SmartTestExecutionJobDetail {
+    // Only prior attempts go in retryAttemptLogs; last run is in jobDetail.steps (no duplication when 1 run).
     const retryAttemptLogs: RetryAttemptLog[] = [];
-    for (let r = 0; r <= upToRetryInclusive; r++) {
+    for (let r = 0; r < upToRetryInclusive; r++) {
       const key = `${testId}_attempt_${r}`;
       const exec = this.testExecutions.get(key);
       if (!exec) continue;
-      const isCurrent = r === upToRetryInclusive;
-      const status =
-        isCurrent && currentAttemptIsFinal && finalStatus !== undefined
-          ? finalStatus
-          : isCurrent && !currentAttemptIsFinal
-            ? SmartTestExecutionStatus.SMART_TEST_EXECUTION_IN_PROGRESS
-            : !isCurrent
-              ? SmartTestExecutionStatus.SMART_TEST_EXECUTION_FAILED
-              : undefined;
-      const error = isCurrent && currentAttemptIsFinal ? finalError : undefined;
       retryAttemptLogs.push({
         retryCount: r,
         steps: [...exec.steps],
-        status,
-        error
+        status: SmartTestExecutionStatus.SMART_TEST_EXECUTION_FAILED,
+        error: undefined
       });
     }
     const currentExec = this.testExecutions.get(`${testId}_attempt_${upToRetryInclusive}`);

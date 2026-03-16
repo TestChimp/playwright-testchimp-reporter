@@ -25,14 +25,33 @@ export enum ScenarioCoverageStatus {
   NOT_ATTEMPTED_SCENARIO_COVERAGE = 3
 }
 
+export interface PlaywrightLocation {
+  file?: string;
+  line?: number;
+  column?: number;
+}
+
+export interface PlaywrightError {
+  message?: string;
+  stack?: string;
+  snippet?: string;
+  value?: string;
+  location?: PlaywrightLocation;
+  cause?: PlaywrightError;
+}
+
 export interface SmartTestExecutionStep {
   stepId?: string;
   description: string;
   code?: string;
-  screenshotBase64?: string;  // Base64 encoded screenshot (only for failing steps)
+  screenshotBase64?: string;  // Base64 encoded screenshot (only for failing steps; deprecated in favor of screenshotPath)
+  screenshotPath?: string;    // GCS path to screenshot (preferred)
   status: StepExecutionStatus;
   error?: string;
   wasRepaired?: boolean;
+  pwStepCategory?: string;
+  durationMs?: number;
+  pwError?: PlaywrightError;
 }
 
 export interface ScenarioCoverageResult {
@@ -58,6 +77,7 @@ export interface SmartTestExecutionJobDetail {
   scenarioCoverageResults: ScenarioCoverageResult[];
   /** All retry attempts (platform mode); each entry has retryCount, steps, status, error */
   retryAttemptLogs?: RetryAttemptLog[];
+  pwError?: PlaywrightError;
 }
 
 export interface SmartTestExecutionReport {

@@ -5,9 +5,11 @@ import type {
   TestCase,
   TestResult,
   TestStep,
-  FullResult
+  FullResult,
+  TestError
 } from '@playwright/test/reporter';
 import fs from 'fs';
+import sharp from 'sharp';
 
 import { TestChimpApiClient } from './api-client';
 import {
@@ -310,6 +312,9 @@ export class TestChimpReporter implements Reporter {
         ? StepExecutionStatus.FAILURE_STEP_EXECUTION
         : StepExecutionStatus.SUCCESS_STEP_EXECUTION,
       error: step.error?.message,
+      pwStepCategory: step.category,
+      durationMs: step.duration,
+      pwError: this.toPlaywrightError(step.error),
       wasRepaired: false
     };
 
@@ -385,7 +390,7 @@ export class TestChimpReporter implements Reporter {
         const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
         if (jobId) {
           if (this.options.captureScreenshots) {
-            this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
+            await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
           }
           const jobDetail = this.buildFinalJobDetailForPlatform(test, result, paths.testName);
           try {
@@ -412,6 +417,11 @@ export class TestChimpReporter implements Reporter {
       console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
       this.testExecutions.delete(testKey);
       return;
+    }
+
+    // Attach screenshots (CI mode) before building the report
+    if (this.options.captureScreenshots) {
+      await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
     }
 
     // Build the report
@@ -498,11 +508,6 @@ export class TestChimpReporter implements Reporter {
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);
 
-    // Attach screenshots to failing steps only
-    if (this.options.captureScreenshots) {
-      this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
-    }
-
     return {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
@@ -516,6 +521,7 @@ export class TestChimpReporter implements Reporter {
         steps: execution.steps,
         status,
         error: result.error?.message,
+        pwError: this.toPlaywrightError(result.error),
         scenarioCoverageResults: [] // Backend will populate if empty
       },
       startedAtMillis: execution.startedAt,
@@ -542,10 +548,10 @@ export class TestChimpReporter implements Reporter {
   /**
    * Attach screenshots as base64 to failing steps only
    */
-  private attachScreenshotsToFailingSteps(
+  private async attachScreenshotsToFailingSteps(
     steps: SmartTestExecutionStep[],
     attachments: TestResult['attachments']
-  ): void {
+  ): Promise<void> {
     // Log all attachments for debugging
     console.log(`[TestChimp] Processing screenshots: ${attachments.length} total attachment(s), ${steps.length} step(s) total`);
     if (attachments.length > 0) {
@@ -569,7 +575,7 @@ export class TestChimpReporter implements Reporter {
 
     // Find failing steps
     const failingSteps = steps.filter(
-      (s) => s.status === StepExecutionStatus.FAILURE_STEP_EXECUTION && !s.screenshotBase64
+      (s) => s.status === StepExecutionStatus.FAILURE_STEP_EXECUTION && !s.screenshotPath
     );
 
     console.log(`[TestChimp] Found ${failingSteps.length} failing step(s) without screenshots`);
@@ -579,37 +585,76 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    // Attach screenshots to failing steps (attach test-level screenshot to all failing steps)
-    // If there's only one screenshot but multiple failing steps, attach it to all of them
-    for (let stepIdx = 0; stepIdx < failingSteps.length; stepIdx++) {
-      const step = failingSteps[stepIdx];
-      // Use the last screenshot (most recent, likely from test failure) for all failing steps
-      const screenshot = screenshots[screenshots.length - 1];
+    // Use the last screenshot (most recent, likely from test failure)
+    const screenshot = screenshots[screenshots.length - 1];
 
+    let imageBuffer: Buffer | null = null;
+    try {
       if (screenshot.path) {
-        try {
-          const imageBuffer = fs.readFileSync(screenshot.path);
-          const base64String = imageBuffer.toString('base64');
-          step.screenshotBase64 = base64String;
-
-          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) from path to failing step ${stepIdx + 1}: "${step.description}"`);
-          console.log(`[TestChimp]   Screenshot path: ${screenshot.path}`);
-        } catch (error) {
-          console.error(`[TestChimp] ✗ Failed to read screenshot from ${screenshot.path}:`, error);
-        }
+        imageBuffer = fs.readFileSync(screenshot.path);
       } else if (screenshot.body) {
-        // Screenshot is already in body (Buffer), convert to base64
-        try {
-          const base64String = Buffer.from(screenshot.body).toString('base64');
-          step.screenshotBase64 = base64String;
-
-          console.log(`[TestChimp] ✓ Attached screenshot (${base64String.length} bytes) from body to failing step ${stepIdx + 1}: "${step.description}"`);
-        } catch (error) {
-          console.error(`[TestChimp] ✗ Failed to convert screenshot body to base64:`, error);
-        }
-      } else {
-        console.warn(`[TestChimp] Screenshot has neither path nor body`);
+        imageBuffer = Buffer.from(screenshot.body);
       }
+    } catch (error) {
+      console.error(`[TestChimp] ✗ Failed to read screenshot:`, error);
+      imageBuffer = null;
     }
+
+    if (!imageBuffer) {
+      console.warn('[TestChimp] Screenshot has neither readable path nor body; skipping upload');
+      return;
+    }
+
+    try {
+      // Convert to JPEG (quality 50) to reduce size
+      const jpegBuffer = await sharp(imageBuffer)
+        .jpeg({ quality: 50 })
+        .toBuffer();
+
+      if (!this.apiClient) {
+        console.warn('[TestChimp] API client not initialized; cannot upload attachment');
+        return;
+      }
+
+      const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
+
+      // Attach the same screenshot path to all failing steps
+      for (let stepIdx = 0; stepIdx < failingSteps.length; stepIdx++) {
+        const step = failingSteps[stepIdx];
+        step.screenshotPath = uploadResp.gcp_path;
+        // Clear any old base64 if present
+        if (step.screenshotBase64) {
+          delete step.screenshotBase64;
+        }
+        console.log(
+          `[TestChimp] ✓ Attached screenshot path to failing step ${stepIdx + 1}: "${step.description}" -> ${uploadResp.gcp_path}`
+        );
+      }
+    } catch (error) {
+      console.error('[TestChimp] ✗ Failed to upload screenshot attachment:', error);
+    }
+  }
+
+  private toPlaywrightError(error: TestError | undefined, depth: number = 0, maxDepth: number = 3) {
+    if (!error || depth >= maxDepth) {
+      return undefined;
+    }
+    const mapped: any = {
+      message: error.message,
+      stack: error.stack,
+      snippet: (error as any).snippet,
+      value: (error as any).value,
+    };
+    if (error.location) {
+      mapped.location = {
+        file: error.location.file,
+        line: error.location.line,
+        column: error.location.column,
+      };
+    }
+    if (error.cause) {
+      mapped.cause = this.toPlaywrightError(error.cause, depth + 1, maxDepth);
+    }
+    return mapped;
   }
 }

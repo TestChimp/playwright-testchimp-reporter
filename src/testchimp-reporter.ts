@@ -79,6 +79,7 @@ export class TestChimpReporter implements Reporter {
 
   // Flag to indicate if reporter is properly configured
   private isEnabled: boolean = false;
+  private pendingOperations: Promise<any>[] = [];
 
   constructor(options: TestChimpReporterOptions = {}) {
     this.options = {
@@ -235,9 +236,18 @@ export class TestChimpReporter implements Reporter {
   }
 
   /** Build final job detail for platform test_end (all attempts with final status) */
-  private buildFinalJobDetailForPlatform(test: TestCase, result: TestResult, testName: string): SmartTestExecutionJobDetail {
+  private buildFinalJobDetailForPlatform(
+    test: TestCase,
+    result: TestResult,
+    testName: string,
+    currentSteps: SmartTestExecutionStep[]
+  ): SmartTestExecutionJobDetail {
     const status = this.mapStatus(result.status);
-    return this.buildJobDetailFromAttempts(test.id, testName, result.retry, true, status, result.error?.message);
+    const jobDetail = this.buildJobDetailFromAttempts(test.id, testName, result.retry, true, status, result.error?.message);
+    return {
+      ...jobDetail,
+      steps: [...currentSteps],
+    };
   }
 
   onTestBegin(test: TestCase, result: TestResult): void {
@@ -321,19 +331,17 @@ export class TestChimpReporter implements Reporter {
       const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
       if (jobId) {
         const jobDetail = this.buildCurrentJobDetailForPlatform(test, result.retry, paths.testName);
-        this.apiClient.platformStepEnd(jobId, jobDetail).then(
+        const p = this.apiClient.platformStepEnd(jobId, jobDetail).then(
           () => {
             if (this.options.verbose) {
               console.log(`[TestChimp] platform/step_end ok jobId=${jobId} steps=${jobDetail.steps?.length ?? 0}`);
             }
           },
           (err) => {
-            console.error(
-              `[TestChimp] platform/step_end failed jobId=${jobId}:`,
-              err instanceof Error ? err.message : err
-            );
-          }
-        );
+            console.error(`[TestChimp] platform/step_end failed jobId=${jobId}:`, err instanceof Error ? err.message : err);
+            }
+          );
+          this.pendingOperations.push(p);
       } else {
         console.warn(
           `[TestChimp] platform/step_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
@@ -343,6 +351,12 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
+    const p = this._onTestEndInner(test, result);
+    this.pendingOperations.push(p);
+    await p;
+  }
+
+  private async _onTestEndInner(test: TestCase, result: TestResult): Promise<void> {
     console.log(`[TestChimp] onTestEnd called for test: ${test.title} (status: ${result.status}, retry: ${result.retry})`);
     
     if (!this.isEnabled) {
@@ -383,7 +397,7 @@ export class TestChimpReporter implements Reporter {
           if (this.options.captureScreenshots) {
             await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
           }
-          const jobDetail = this.buildFinalJobDetailForPlatform(test, result, paths.testName);
+          const jobDetail = this.buildFinalJobDetailForPlatform(test, result, paths.testName, execution.steps);
           try {
             await this.apiClient.platformTestEnd(jobId, jobDetail);
             console.log(`[TestChimp] platform/test_end sent: ${test.title} jobId=${jobId} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
@@ -445,6 +459,10 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onEnd(result: FullResult): Promise<void> {
+    if (this.pendingOperations.length > 0) {
+      console.log(`[TestChimp] Waiting for ${this.pendingOperations.length} pending operations to complete...`);
+      await Promise.allSettled(this.pendingOperations);
+    }
     if (this.options.verbose) {
       console.log(`[TestChimp] Test run completed. Status: ${result.status}`);
       console.log(`[TestChimp] Batch invocation ID: ${this.batchInvocationId}`);
@@ -569,7 +587,11 @@ export class TestChimpReporter implements Reporter {
       (s) => s.status === StepExecutionStatus.FAILURE_STEP_EXECUTION && !s.screenshotPath
     );
 
-    console.log(`[TestChimp] Found ${failingSteps.length} failing step(s) without screenshots`);
+    console.log(
+      `[TestChimp] Found ${failingSteps.length} failing step(s) without screenshots; stepIds=${failingSteps
+        .map((s) => s.stepId || 'unknown')
+        .join(', ')}`
+    );
 
     if (failingSteps.length === 0) {
       console.log(`[TestChimp] No failing steps to attach screenshots to`);
@@ -595,30 +617,37 @@ export class TestChimpReporter implements Reporter {
       console.warn('[TestChimp] Screenshot has neither readable path nor body; skipping upload');
       return;
     }
+    console.log(`[TestChimp] Read screenshot buffer: ${imageBuffer.length} bytes`);
+
+    if (!this.apiClient) {
+      console.warn('[TestChimp] API client not initialized; cannot upload attachment');
+      return;
+    }
 
     try {
       // Convert to JPEG (quality 50) to reduce size
       const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 50 })
         .toBuffer();
-
-      if (!this.apiClient) {
-        console.warn('[TestChimp] API client not initialized; cannot upload attachment');
+      console.log(`[TestChimp] Converted to JPEG: ${jpegBuffer.length} bytes, calling uploadAttachment`);
+           const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
+      const gcpPath = uploadResp.gcpPath;
+      if (!gcpPath) {
+        console.error('[TestChimp] uploadAttachment response missing gcpPath; cannot attach to steps');
         return;
       }
-
-      const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
+      console.log(`[TestChimp] uploadAttachment succeeded: ${gcpPath}`);
 
       // Attach the same screenshot path to all failing steps
       for (let stepIdx = 0; stepIdx < failingSteps.length; stepIdx++) {
         const step = failingSteps[stepIdx];
-        step.screenshotPath = uploadResp.gcp_path;
+        step.screenshotPath = gcpPath;
         // Clear any old base64 if present
         if (step.screenshotBase64) {
           delete step.screenshotBase64;
         }
         console.log(
-          `[TestChimp] ✓ Attached screenshot path to failing step ${stepIdx + 1}: "${step.description}" -> ${uploadResp.gcp_path}`
+          `[TestChimp] ✓ Attached screenshot path to failing step ${stepIdx + 1}: "${step.description}" -> ${gcpPath}`
         );
       }
     } catch (error) {

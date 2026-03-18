@@ -152,8 +152,10 @@ export function derivePaths(
     }
   }
 
-  const folderPath = path.dirname(relativePath);
-  const fileName = path.basename(relativePath);
+  // Use posix-style paths so manifest lookup matches scriptservice manifest (forward slashes)
+  const posixRelative = relativePath.split(path.sep).join('/');
+  const folderPath = (path.posix.dirname(posixRelative) === '.' ? '' : path.posix.dirname(posixRelative));
+  const fileName = path.posix.basename(posixRelative);
   
   if (verbose) {
     console.log(`[TestChimp]   Final folderPath: "${folderPath}"`);

@@ -129,9 +129,9 @@ export class TestChimpApiClient {
 
   /**
    * Upload a single attachment (e.g. compressed screenshot) to the backend.
-   * Uses multipart/form-data and returns the parsed response (expects { gcp_path }).
+   * Uses multipart/form-data and returns the parsed response (expects { gcpPath }).
    */
-  async uploadAttachment(buffer: Buffer, contentType: string): Promise<{ gcp_path: string }> {
+  async uploadAttachment(buffer: Buffer, contentType: string): Promise<{ gcpPath: string }> {
     const form = new FormData();
     // Filename is not used for storage (server generates ULID), but helps set content type.
     form.append('file', buffer, {
@@ -146,12 +146,15 @@ export class TestChimpApiClient {
           ...form.getHeaders(),
         },
       });
-      const data = response.data as { gcp_path?: string; gcpPath?: string };
-      const gcpPath = data.gcp_path || (data as any).gcpPath;
+      const data = response.data;
+      
+      const gcpPath = data.gcpPath;
       if (!gcpPath) {
-        throw new Error('[TestChimp] upload_attachment response missing gcp_path');
+        console.error('[TestChimp] upload_attachment response missing gcpPath. Keys:', Object.keys(data || {}));
+        throw new Error('[TestChimp] upload_attachment response missing gcpPath');
       }
-      return { gcp_path: gcpPath };
+
+      return { gcpPath };
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;

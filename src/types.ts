@@ -108,6 +108,8 @@ export interface IngestSmartTestExecutionReportResponse {
 
 /** One entry in the job manifest (test identity -> jobId) written by scriptservice for platform mode */
 export interface JobManifestEntry {
+  fileId?: string;
+  testId?: string;
   folderPath: string;
   fileName: string;
   suitePath: string[];

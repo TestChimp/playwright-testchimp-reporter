@@ -22,7 +22,14 @@ import {
   RetryAttemptLog,
   JobManifestEntry
 } from './types';
-import { derivePaths, generateStepId, generateUUID, getEnvVar, normalizeManifestFolderPath, resolveJobIdFromManifest } from './utils';
+import {
+  derivePaths,
+  generateStepId,
+  generateUUID,
+  getEnvVar,
+  normalizeManifestFolderPath,
+  resolveManifestEntryFromRuntime
+} from './utils';
 import path from 'path';
 
 /**
@@ -134,7 +141,7 @@ export class TestChimpReporter implements Reporter {
       const resolvedPath = path.isAbsolute(manifestPath) ? manifestPath : path.join(rootDir, manifestPath);
       const sample =
         this.jobManifest.length > 0
-          ? ` (sample: ${JSON.stringify(this.jobManifest.slice(0, 2).map((e) => ({ folderPath: e.folderPath, fileName: e.fileName, suitePath: e.suitePath ?? [], testName: e.testName })))}`
+          ? ` (sample: ${JSON.stringify(this.jobManifest.slice(0, 2).map((e) => ({ fileId: e.fileId, testId: e.testId, folderPath: e.folderPath, fileName: e.fileName, suitePath: e.suitePath ?? [], testName: e.testName })))}`
           : '';
       console.log(
         `[TestChimp] Platform mode: manifest from ${resolvedPath} → ${this.jobManifest.length} entries${sample} (backend for step_end/test_end: ${backendUrl})`
@@ -177,8 +184,15 @@ export class TestChimpReporter implements Reporter {
    * - No describe block: both parser and Playwright use suitePath [] → exact match.
    * - Global describe(): parser only sees test.describe() so manifest has []; Playwright reports e.g. ["Suite"] → fallback with [].
    */
-  private getJobIdFromManifest(folderPath: string, fileName: string, suitePath: string[], testName: string): string | undefined {
-    return resolveJobIdFromManifest(this.jobManifest, { folderPath, fileName, suitePath, testName });
+  private getJobFromManifest(
+    folderPath: string,
+    fileName: string,
+    suitePath: string[],
+    testName: string
+  ): { jobId: string; strategy: string } | undefined {
+    const resolved = resolveManifestEntryFromRuntime(this.jobManifest, { folderPath, fileName, suitePath, testName });
+    if (!resolved?.entry?.jobId) return undefined;
+    return { jobId: resolved.entry.jobId, strategy: resolved.strategy };
   }
 
   private getManifestDebugCandidates(fileName: string, testName: string, limit: number = 3): string {
@@ -331,8 +345,12 @@ export class TestChimpReporter implements Reporter {
     // Platform mode: after each step, send full job detail to scriptservice (blind upsert)
     if (this.options.executionMode === 'platform' && this.apiClient) {
       const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
-      const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
-      if (jobId) {
+      const resolved = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
+      if (resolved?.jobId) {
+        const jobId = resolved.jobId;
+        console.log(
+          `[TestChimp] platform/step_end resolve strategy=${resolved.strategy} jobId=${jobId} fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+        );
         const jobDetail = this.buildCurrentJobDetailForPlatform(test, result.retry, paths.testName);
         const p = this.apiClient.platformStepEnd(jobId, jobDetail).then(
           () => {
@@ -395,8 +413,12 @@ export class TestChimpReporter implements Reporter {
     if (this.options.executionMode === 'platform') {
       if (isFinalAttempt && this.apiClient) {
         const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
-        const jobId = this.getJobIdFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
-        if (jobId) {
+        const resolved = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
+        if (resolved?.jobId) {
+          const jobId = resolved.jobId;
+          console.log(
+            `[TestChimp] platform/test_end resolve strategy=${resolved.strategy} jobId=${jobId} fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+          );
           if (this.options.captureScreenshots) {
             await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
           }

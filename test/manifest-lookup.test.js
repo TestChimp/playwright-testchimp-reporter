@@ -1,6 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveJobIdFromManifest, normalizeManifestFolderPath } = require('../dist/utils');
+const {
+  resolveJobIdFromManifest,
+  resolveManifestEntryFromRuntime,
+  normalizeManifestFolderPath,
+} = require('../dist/utils');
 
 test('normalizes tests-prefixed folder paths to manifest convention', () => {
   assert.equal(normalizeManifestFolderPath('tests/e2e'), 'e2e');
@@ -64,4 +68,35 @@ test('falls back from runtime suitePath to empty suitePath entry', () => {
     testName: 'search_success',
   });
   assert.equal(jobId, 'job-suite-fallback');
+});
+
+test('prefers stable identity unique match over folder tuple mismatch', () => {
+  const manifest = [
+    {
+      fileId: 'file-1',
+      testId: 'test-1',
+      folderPath: '',
+      fileName: 'TeamSearch.spec.js',
+      suitePath: [],
+      testName: 'search_success',
+      jobId: 'job-stable-1',
+    },
+    {
+      fileId: 'file-1',
+      testId: 'test-2',
+      folderPath: '',
+      fileName: 'TeamSearch.spec.js',
+      suitePath: [],
+      testName: 'search_empty_results',
+      jobId: 'job-stable-2',
+    },
+  ];
+  const resolved = resolveManifestEntryFromRuntime(manifest, {
+    folderPath: 'e2e',
+    fileName: 'TeamSearch.spec.js',
+    suitePath: [],
+    testName: 'search_success',
+  });
+  assert.equal(resolved?.entry?.jobId, 'job-stable-1');
+  assert.equal(resolved?.strategy, 'stable_identity_unique');
 });

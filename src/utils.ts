@@ -60,26 +60,73 @@ export function resolveJobIdFromManifest(
   manifest: JobManifestEntry[],
   key: { folderPath: string; fileName: string; suitePath: string[]; testName: string }
 ): string | undefined {
-  const runtimeFolder = normalizeManifestFolderPath(key.folderPath);
-  const folderCandidates = Array.from(
-    new Set<string>([
-      runtimeFolder,
-      key.folderPath,
-      normalizeManifestFolderPath(`tests/${runtimeFolder}`),
-      normalizeManifestFolderPath(`tests/${key.folderPath}`),
-    ])
-  );
-  const suiteCandidates = buildSuitePathCandidates(normalizeSuitePath(key.suitePath));
+  return resolveManifestEntryFromRuntime(manifest, key)?.entry?.jobId;
+}
 
-  for (const folderPath of folderCandidates) {
-    for (const suitePath of suiteCandidates) {
-      const hit = manifest.find((e) =>
-        normalizeManifestFolderPath(e.folderPath) === normalizeManifestFolderPath(folderPath) &&
-        e.fileName === key.fileName &&
-        JSON.stringify(normalizeSuitePath(e.suitePath)) === JSON.stringify(suitePath) &&
-        e.testName === key.testName
-      );
-      if (hit?.jobId) return hit.jobId;
+export interface ManifestResolutionResult {
+  entry: JobManifestEntry;
+  strategy:
+    | 'exact_path_tuple'
+    | 'normalized_path_tuple'
+    | 'suitepath_empty_fallback'
+    | 'stable_identity_unique';
+}
+
+/**
+ * Resolve full manifest entry with deterministic strategy metadata.
+ * Stable identity (`fileName + suitePath + testName`) is preferred over path-only
+ * when it uniquely identifies a single manifest entry.
+ */
+export function resolveManifestEntryFromRuntime(
+  manifest: JobManifestEntry[],
+  key: { folderPath: string; fileName: string; suitePath: string[]; testName: string }
+): ManifestResolutionResult | undefined {
+  const runtimeFolder = normalizeManifestFolderPath(key.folderPath);
+  const normalizedSuitePath = normalizeSuitePath(key.suitePath);
+  const suitePathJson = JSON.stringify(normalizedSuitePath);
+
+  const stableIdentityMatches = manifest.filter((e) =>
+    e.fileName === key.fileName &&
+    JSON.stringify(normalizeSuitePath(e.suitePath)) === suitePathJson &&
+    e.testName === key.testName &&
+    !!e.jobId
+  );
+  if (stableIdentityMatches.length === 1) {
+    return { entry: stableIdentityMatches[0], strategy: 'stable_identity_unique' };
+  }
+
+  const exactTuple = manifest.find((e) =>
+    e.folderPath === key.folderPath &&
+    e.fileName === key.fileName &&
+    JSON.stringify(normalizeSuitePath(e.suitePath)) === suitePathJson &&
+    e.testName === key.testName &&
+    !!e.jobId
+  );
+  if (exactTuple) {
+    return { entry: exactTuple, strategy: 'exact_path_tuple' };
+  }
+
+  const normalizedTuple = manifest.find((e) =>
+    normalizeManifestFolderPath(e.folderPath) === runtimeFolder &&
+    e.fileName === key.fileName &&
+    JSON.stringify(normalizeSuitePath(e.suitePath)) === suitePathJson &&
+    e.testName === key.testName &&
+    !!e.jobId
+  );
+  if (normalizedTuple) {
+    return { entry: normalizedTuple, strategy: 'normalized_path_tuple' };
+  }
+
+  if (normalizedSuitePath.length > 0) {
+    const suiteEmpty = manifest.find((e) =>
+      normalizeManifestFolderPath(e.folderPath) === runtimeFolder &&
+      e.fileName === key.fileName &&
+      JSON.stringify(normalizeSuitePath(e.suitePath)) === '[]' &&
+      e.testName === key.testName &&
+      !!e.jobId
+    );
+    if (suiteEmpty) {
+      return { entry: suiteEmpty, strategy: 'suitepath_empty_fallback' };
     }
   }
   return undefined;

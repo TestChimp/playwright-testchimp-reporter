@@ -1,5 +1,6 @@
 import path from 'path';
 import type { TestCase, Suite } from '@playwright/test/reporter';
+import type { JobManifestEntry } from './types';
 
 /**
  * Derived path components for test identification
@@ -16,6 +17,72 @@ export interface TestInfoLike {
   title: string;
   titlePath?: () => string[];
   project?: { name?: string };
+}
+
+/**
+ * Canonicalize folderPath to match scriptservice manifest convention:
+ * - normalize separators to '/'
+ * - trim duplicate slashes
+ * - strip leading './'
+ * - strip leading 'tests/' (or 'tests')
+ * - map '.' to ''
+ */
+export function normalizeManifestFolderPath(folderPath: string): string {
+  if (!folderPath) return '';
+  const posix = folderPath.split(path.sep).join('/').replace(/\\/g, '/');
+  const trimmed = posix
+    .replace(/^\.\//, '')
+    .replace(/\/{2,}/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  if (!trimmed || trimmed === '.') return '';
+  return trimmed.replace(/^tests(?:\/|$)/, '');
+}
+
+function normalizeSuitePath(suitePath: string[] | undefined): string[] {
+  return Array.isArray(suitePath) ? suitePath : [];
+}
+
+function buildSuitePathCandidates(runtimeSuitePath: string[]): string[][] {
+  const unique = new Map<string, string[]>();
+  const add = (sp: string[]) => unique.set(JSON.stringify(sp), sp);
+  add(runtimeSuitePath);
+  if (runtimeSuitePath.length > 0) {
+    add([]);
+  }
+  return Array.from(unique.values());
+}
+
+/**
+ * Resolve a manifest jobId using robust fallback candidates for folderPath/suitePath.
+ * Exact candidates are attempted first, then normalized variants.
+ */
+export function resolveJobIdFromManifest(
+  manifest: JobManifestEntry[],
+  key: { folderPath: string; fileName: string; suitePath: string[]; testName: string }
+): string | undefined {
+  const runtimeFolder = normalizeManifestFolderPath(key.folderPath);
+  const folderCandidates = Array.from(
+    new Set<string>([
+      runtimeFolder,
+      key.folderPath,
+      normalizeManifestFolderPath(`tests/${runtimeFolder}`),
+      normalizeManifestFolderPath(`tests/${key.folderPath}`),
+    ])
+  );
+  const suiteCandidates = buildSuitePathCandidates(normalizeSuitePath(key.suitePath));
+
+  for (const folderPath of folderCandidates) {
+    for (const suitePath of suiteCandidates) {
+      const hit = manifest.find((e) =>
+        normalizeManifestFolderPath(e.folderPath) === normalizeManifestFolderPath(folderPath) &&
+        e.fileName === key.fileName &&
+        JSON.stringify(normalizeSuitePath(e.suitePath)) === JSON.stringify(suitePath) &&
+        e.testName === key.testName
+      );
+      if (hit?.jobId) return hit.jobId;
+    }
+  }
+  return undefined;
 }
 
 /**

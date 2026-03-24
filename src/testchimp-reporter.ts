@@ -22,7 +22,7 @@ import {
   RetryAttemptLog,
   JobManifestEntry
 } from './types';
-import { derivePaths, generateStepId, generateUUID, getEnvVar } from './utils';
+import { derivePaths, generateStepId, generateUUID, getEnvVar, normalizeManifestFolderPath, resolveJobIdFromManifest } from './utils';
 import path from 'path';
 
 /**
@@ -178,17 +178,20 @@ export class TestChimpReporter implements Reporter {
    * - Global describe(): parser only sees test.describe() so manifest has []; Playwright reports e.g. ["Suite"] → fallback with [].
    */
   private getJobIdFromManifest(folderPath: string, fileName: string, suitePath: string[], testName: string): string | undefined {
-    const match = (e: JobManifestEntry, sp: string[]) =>
-      e.folderPath === folderPath &&
-      e.fileName === fileName &&
-      JSON.stringify(e.suitePath || []) === JSON.stringify(sp || []) &&
-      e.testName === testName;
+    return resolveJobIdFromManifest(this.jobManifest, { folderPath, fileName, suitePath, testName });
+  }
 
-    let entry = this.jobManifest.find((e) => match(e, suitePath));
-    if (!entry && suitePath.length > 0) {
-      entry = this.jobManifest.find((e) => match(e, []));
-    }
-    return entry?.jobId;
+  private getManifestDebugCandidates(fileName: string, testName: string, limit: number = 3): string {
+    const candidates = this.jobManifest
+      .filter((e) => e.fileName === fileName || e.testName === testName)
+      .slice(0, limit)
+      .map((e) => ({
+        folderPath: normalizeManifestFolderPath(e.folderPath),
+        fileName: e.fileName,
+        suitePath: e.suitePath || [],
+        testName: e.testName
+      }));
+    return JSON.stringify(candidates);
   }
 
   /**
@@ -344,7 +347,7 @@ export class TestChimpReporter implements Reporter {
           this.pendingOperations.push(p);
       } else {
         console.warn(
-          `[TestChimp] platform/step_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+          `[TestChimp] platform/step_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" normalizedFolderPath="${normalizeManifestFolderPath(paths.folderPath)}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}" candidates=${this.getManifestDebugCandidates(paths.fileName, paths.testName)}`
         );
       }
     }
@@ -406,7 +409,7 @@ export class TestChimpReporter implements Reporter {
           }
         } else {
           console.warn(
-            `[TestChimp] platform/test_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+            `[TestChimp] platform/test_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" normalizedFolderPath="${normalizeManifestFolderPath(paths.folderPath)}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}" candidates=${this.getManifestDebugCandidates(paths.fileName, paths.testName)}`
           );
         }
         // Cleanup all attempts for this test (we have attempts 0..result.retry)

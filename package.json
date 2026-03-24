@@ -20,7 +20,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "npm run build && node --test test/*.test.js"
   },
   "peerDependencies": {
     "@playwright/test": ">=1.40.0"

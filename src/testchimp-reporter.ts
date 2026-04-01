@@ -101,7 +101,7 @@ export class TestChimpReporter implements Reporter {
       reportOnlyFinalAttempt: options.reportOnlyFinalAttempt ?? true,
       captureScreenshots: options.captureScreenshots ?? true,
       verbose: options.verbose ?? false,
-      executionMode: (options.executionMode || getEnvVar('TESTCHIMP_EXECUTION_MODE', 'ci') || 'ci') as 'ci' | 'platform'
+      executionMode: (options.executionMode || getEnvVar('TESTCHIMP_EXECUTION_MODE', 'ci') || 'ci') as 'ci' | 'platform' | 'repair'
     };
   }
 
@@ -113,9 +113,10 @@ export class TestChimpReporter implements Reporter {
     const apiKey = getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey);
     const projectId = getEnvVar('TESTCHIMP_PROJECT_ID', this.options.projectId);
     this.testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER', this.options.testsFolder) || 'tests';
-    // In platform mode reporter calls scriptservice (step_end/test_end) via TESTCHIMP_PLATFORM_BACKEND_URL; TESTCHIMP_BACKEND_URL stays as featureservice for ai-wright etc.
+    // In platform/repair mode reporter calls scriptservice (step_end/test_end or repair_* endpoints)
+    // via TESTCHIMP_PLATFORM_BACKEND_URL; TESTCHIMP_BACKEND_URL stays as featureservice for ai-wright etc.
     const backendUrl =
-      this.options.executionMode === 'platform'
+      this.options.executionMode === 'platform' || this.options.executionMode === 'repair'
         ? getEnvVar('TESTCHIMP_PLATFORM_BACKEND_URL', this.options.platformBackendUrl) || getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io'
         : getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
 
@@ -123,13 +124,15 @@ export class TestChimpReporter implements Reporter {
     this.options.release = getEnvVar('TESTCHIMP_RELEASE', this.options.release) || '';
     this.options.environment = getEnvVar('TESTCHIMP_ENV', this.options.environment) || '';
 
-    if (!apiKey || !projectId) {
+    // In repair mode we allow reporting to scriptservice localhost without an API key.
+    // (API client still requires a header value, so we pass a dummy string.)
+    if ((!apiKey || !projectId) && this.options.executionMode !== 'repair') {
       console.warn('[TestChimp] Missing TESTCHIMP_API_KEY or TESTCHIMP_PROJECT_ID. Reporting disabled.');
       this.isEnabled = false;
       return;
     }
 
-    this.apiClient = new TestChimpApiClient(backendUrl, apiKey, projectId, this.options.verbose);
+    this.apiClient = new TestChimpApiClient(backendUrl, apiKey || 'local-repair', projectId || '', this.options.verbose);
     this.isEnabled = true;
 
     if (this.options.executionMode === 'platform') {
@@ -264,6 +267,7 @@ export class TestChimpReporter implements Reporter {
     return {
       ...jobDetail,
       steps: [...currentSteps],
+      pwError: this.toPlaywrightError(result.error)
     };
   }
 
@@ -300,6 +304,31 @@ export class TestChimpReporter implements Reporter {
 
   onStepEnd(test: TestCase, result: TestResult, step: TestStep): void {
     if (!this.isEnabled) return;
+    // Repair mode: emit lightweight progress events (multiple healer reruns are grouped by run index).
+    if (this.options.executionMode === 'repair' && this.apiClient) {
+      const jobId = getEnvVar('TESTCHIMP_REPAIR_JOB_ID', '') || '';
+      if (jobId) {
+        const runIndexRaw = getEnvVar('TESTCHIMP_REPAIR_RUN_INDEX', '0') || '0';
+        const runIndex = Number(runIndexRaw) || 0;
+        const event = {
+          runIndex,
+          timestampMillis: Date.now(),
+          message: `[${step.category}] ${step.title}${step.error?.message ? ` (error: ${step.error.message})` : ''}`,
+          phase: 'RUNNING_HEALER',
+          rawPayloadJson: JSON.stringify({
+            testTitle: test.title,
+            retry: result.retry,
+            step: { title: step.title, category: step.category, duration: step.duration },
+            error: step.error ? { message: step.error.message, stack: (step.error as any).stack } : undefined,
+          }),
+        };
+        const p = this.apiClient.repairStepEnd(jobId, event).catch((err) => {
+          console.error(`[TestChimp] repair_step_end failed jobId=${jobId}:`, err instanceof Error ? err.message : err);
+        });
+        this.pendingOperations.push(p);
+      }
+      // Continue capturing steps locally for consistency (no-op for repair UI today).
+    }
 
     const testKey = this.getTestKey(test, result.retry);
     const execution = this.testExecutions.get(testKey);
@@ -325,7 +354,7 @@ export class TestChimpReporter implements Reporter {
 
     const executionStep: SmartTestExecutionStep = {
       stepId,
-      description: step.title,
+      description: this.getStepDescription(step),
       status: step.error
         ? StepExecutionStatus.FAILURE_STEP_EXECUTION
         : StepExecutionStatus.SUCCESS_STEP_EXECUTION,
@@ -339,7 +368,9 @@ export class TestChimpReporter implements Reporter {
     execution.steps.push(executionStep);
 
     if (this.options.verbose) {
-      console.log(`[TestChimp] Step captured: ${stepNumber} (${step.category}): ${step.title} - ${executionStep.status}`);
+      console.log(
+        `[TestChimp] Step captured: ${stepNumber} (${step.category}): "${executionStep.description}" (raw: "${step.title}") - ${executionStep.status}`
+      );
     }
 
     // Platform mode: after each step, send full job detail to scriptservice (blind upsert)
@@ -387,6 +418,28 @@ export class TestChimpReporter implements Reporter {
     
     if (!this.apiClient) {
       console.log(`[TestChimp] API client is not initialized, skipping report for: ${test.title}`);
+      return;
+    }
+
+    // Repair mode: emit end-of-run marker and stop (no CI/platform ingest report).
+    if (this.options.executionMode === 'repair') {
+      const jobId = getEnvVar('TESTCHIMP_REPAIR_JOB_ID', '') || '';
+      if (jobId) {
+        const runIndexRaw = getEnvVar('TESTCHIMP_REPAIR_RUN_INDEX', '0') || '0';
+        const runIndex = Number(runIndexRaw) || 0;
+        const summary = {
+          runIndex,
+          timestampMillis: Date.now(),
+          status: result.status,
+          message: `Repair run completed with status=${result.status} retry=${result.retry}`,
+          errorMessage: result.error?.message,
+        };
+        try {
+          await this.apiClient.repairTestEnd(jobId, summary);
+        } catch (e) {
+          console.error(`[TestChimp] repair_test_end failed jobId=${jobId}:`, e);
+        }
+      }
       return;
     }
 
@@ -580,7 +633,7 @@ export class TestChimpReporter implements Reporter {
   }
 
   /**
-   * Attach screenshots as base64 to failing steps only
+   * Attach failure screenshots: failing steps first; if none, attach to last step (test-level failures e.g. ai.act).
    */
   private async attachScreenshotsToFailingSteps(
     steps: SmartTestExecutionStep[],
@@ -607,19 +660,34 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    // Find failing steps
-    const failingSteps = steps.filter(
+    const failingWithoutScreenshot = steps.filter(
       (s) => s.status === StepExecutionStatus.FAILURE_STEP_EXECUTION && !s.screenshotPath
     );
 
-    console.log(
-      `[TestChimp] Found ${failingSteps.length} failing step(s) without screenshots; stepIds=${failingSteps
-        .map((s) => s.stepId || 'unknown')
-        .join(', ')}`
-    );
+    let targetSteps: SmartTestExecutionStep[];
 
-    if (failingSteps.length === 0) {
-      console.log(`[TestChimp] No failing steps to attach screenshots to`);
+    if (failingWithoutScreenshot.length > 0) {
+      targetSteps = failingWithoutScreenshot;
+      console.log(
+        `[TestChimp] Found ${targetSteps.length} failing step(s) without screenshots; stepIds=${targetSteps
+          .map((s) => s.stepId || 'unknown')
+          .join(', ')}`
+      );
+    } else if (steps.length > 0) {
+      const last = steps[steps.length - 1];
+      if (last && !last.screenshotPath) {
+        targetSteps = [last];
+        console.log(
+          `[TestChimp] No failing steps without screenshot; attaching failure screenshot to last step (fallback): "${last.description}" (${last.stepId})`
+        );
+      } else {
+        console.log(
+          `[TestChimp] No failing steps to attach screenshots to${last?.screenshotPath ? ' (last step already has screenshot)' : ''}`
+        );
+        return;
+      }
+    } else {
+      console.log(`[TestChimp] No failing steps to attach screenshots to (no steps recorded)`);
       return;
     }
 
@@ -655,7 +723,7 @@ export class TestChimpReporter implements Reporter {
         .jpeg({ quality: 50 })
         .toBuffer();
       console.log(`[TestChimp] Converted to JPEG: ${jpegBuffer.length} bytes, calling uploadAttachment`);
-           const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
+      const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
       const gcpPath = uploadResp.gcpPath;
       if (!gcpPath) {
         console.error('[TestChimp] uploadAttachment response missing gcpPath; cannot attach to steps');
@@ -663,21 +731,100 @@ export class TestChimpReporter implements Reporter {
       }
       console.log(`[TestChimp] uploadAttachment succeeded: ${gcpPath}`);
 
-      // Attach the same screenshot path to all failing steps
-      for (let stepIdx = 0; stepIdx < failingSteps.length; stepIdx++) {
-        const step = failingSteps[stepIdx];
+      for (let stepIdx = 0; stepIdx < targetSteps.length; stepIdx++) {
+        const step = targetSteps[stepIdx];
         step.screenshotPath = gcpPath;
-        // Clear any old base64 if present
         if (step.screenshotBase64) {
           delete step.screenshotBase64;
         }
         console.log(
-          `[TestChimp] ✓ Attached screenshot path to failing step ${stepIdx + 1}: "${step.description}" -> ${gcpPath}`
+          `[TestChimp] ✓ Attached screenshot path to step ${stepIdx + 1}: "${step.description}" -> ${gcpPath}`
         );
       }
     } catch (error) {
       console.error('[TestChimp] ✗ Failed to upload screenshot attachment:', error);
     }
+  }
+
+  /**
+   * Generic Playwright pw:api leaf titles; use innermost enclosing test.step title instead.
+   */
+  private static readonly GENERIC_PW_API_TITLES = new Set(
+    [
+      'evaluate',
+      'screenshot',
+      'navigate',
+      'wait',
+      'click',
+      'fill',
+      'select',
+      'check',
+      'press',
+      'hover',
+      'drag',
+      'tap',
+      'type',
+      'reload',
+      'go to url',
+      'get attribute',
+      'inner text',
+      'text content',
+      'viewport',
+      'close context',
+      'close page',
+      'new page',
+      'keyboard',
+      'mouse',
+      'wait for event',
+      'wait for timeout',
+      'wait for load state',
+      'wait for selector',
+      'wait for function',
+      'focus',
+      'blur',
+      'dispatch event',
+      'emulate media',
+      'add init script',
+      'expose binding',
+      'route',
+      'unroute',
+      'set content',
+      'set extra http headers',
+      'add cookies',
+      'clear cookies',
+      'grant permissions',
+      'clear permissions'
+    ]
+  );
+
+  private isGenericPwApiTitle(title: string): boolean {
+    return TestChimpReporter.GENERIC_PW_API_TITLES.has(title.trim().toLowerCase());
+  }
+
+  /** Closest ancestor test.step (user/framework intent), e.g. ai.act wrapper. */
+  private getInnermostEnclosingTestStepTitle(step: TestStep): string | undefined {
+    let p: TestStep | undefined = step.parent;
+    while (p) {
+      if (p.category === 'test.step') {
+        return p.title;
+      }
+      p = p.parent;
+    }
+    return undefined;
+  }
+
+  /** Single-line description: test.step / expect use title; generic pw:api uses enclosing test.step title when present. */
+  private getStepDescription(step: TestStep): string {
+    if (step.category === 'test.step' || step.category === 'expect') {
+      return step.title;
+    }
+    if (step.category === 'pw:api' && this.isGenericPwApiTitle(step.title)) {
+      const enclosing = this.getInnermostEnclosingTestStepTitle(step);
+      if (enclosing) {
+        return enclosing;
+      }
+    }
+    return step.title;
   }
 
   private toPlaywrightError(error: TestError | undefined, depth: number = 0, maxDepth: number = 3) {

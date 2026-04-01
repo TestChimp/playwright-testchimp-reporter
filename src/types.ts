@@ -143,6 +143,6 @@ export interface TestChimpReporterOptions {
   captureScreenshots?: boolean;
   /** Enable verbose logging (default: false) */
   verbose?: boolean;
-  /** Execution mode: 'ci' = report to featureservice ingest on test end; 'platform' = report step_end/test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
-  executionMode?: 'ci' | 'platform';
+  /** Execution mode: 'ci' = report to featureservice ingest on test end; 'platform' = report step_end/test_end to scriptservice; 'repair' = report repair_step_end/repair_test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
+  executionMode?: 'ci' | 'platform' | 'repair';
 }

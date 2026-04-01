@@ -213,4 +213,40 @@ export class TestChimpApiClient {
   isConfigured(): boolean {
     return !!this.projectId;
   }
+
+  /**
+   * Repair mode: emit a single progress event (step-level).
+   * POST {backend}/api/platform/repair_step_end with { jobId, event }.
+   */
+  async repairStepEnd(jobId: string, event: Record<string, unknown>): Promise<void> {
+    try {
+      const body = { jobId, event };
+      await this.client.post('/api/platform/repair_step_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] repair_step_end error (${status}): ${message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Repair mode: mark end of one healer run (can be emitted multiple times).
+   * POST {backend}/api/platform/repair_test_end with { jobId, summary }.
+   */
+  async repairTestEnd(jobId: string, summary: Record<string, unknown>): Promise<void> {
+    try {
+      const body = { jobId, summary };
+      await this.client.post('/api/platform/repair_test_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] repair_test_end error (${status}): ${message}`);
+      }
+      throw error;
+    }
+  }
 }

@@ -89,6 +89,15 @@ export class TestChimpReporter implements Reporter {
   private pendingOperations: Promise<any>[] = [];
 
   constructor(options: TestChimpReporterOptions = {}) {
+    // Env wins over playwright.config reporter options so repair/platform runs can
+    // force mode (e.g. scriptservice sets TESTCHIMP_EXECUTION_MODE=repair; customer
+    // configs often hard-code executionMode: 'ci', which would otherwise hit FeatureService).
+    const envMode = getEnvVar('TESTCHIMP_EXECUTION_MODE')?.trim();
+    const executionMode: 'ci' | 'platform' | 'repair' =
+      envMode === 'repair' || envMode === 'platform' || envMode === 'ci'
+        ? envMode
+        : (options.executionMode || 'ci');
+
     this.options = {
       apiKey: options.apiKey || '',
       backendUrl: options.backendUrl || '',
@@ -101,7 +110,7 @@ export class TestChimpReporter implements Reporter {
       reportOnlyFinalAttempt: options.reportOnlyFinalAttempt ?? true,
       captureScreenshots: options.captureScreenshots ?? true,
       verbose: options.verbose ?? false,
-      executionMode: (options.executionMode || getEnvVar('TESTCHIMP_EXECUTION_MODE', 'ci') || 'ci') as 'ci' | 'platform' | 'repair'
+      executionMode
     };
   }
 

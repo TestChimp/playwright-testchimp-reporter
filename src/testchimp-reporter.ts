@@ -68,6 +68,9 @@ interface RetryInfo {
  * });
  */
 export class TestChimpReporter implements Reporter {
+  private static readonly DEFAULT_TRACE_MAX_BYTES = 25 * 1024 * 1024;
+  private static readonly DEFAULT_TRACE_UPLOAD_TIMEOUT_MS = 120_000;
+  private static readonly DEFAULT_TRACE_UPLOAD_RETRIES = 2;
   private config!: FullConfig;
   private options: Required<TestChimpReporterOptions>;
   private apiClient: TestChimpApiClient | null = null;
@@ -485,6 +488,10 @@ export class TestChimpReporter implements Reporter {
             await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
           }
           const jobDetail = this.buildFinalJobDetailForPlatform(test, result, paths.testName, execution.steps);
+          const traceGcsPath = await this.uploadTraceAttachmentIfPresent(result.attachments);
+          if (traceGcsPath) {
+            jobDetail.traceGcsPath = traceGcsPath;
+          }
           try {
             await this.apiClient.platformTestEnd(jobId, jobDetail);
             console.log(`[TestChimp] platform/test_end sent: ${test.title} jobId=${jobId} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
@@ -518,6 +525,10 @@ export class TestChimpReporter implements Reporter {
 
     // Build the report
     const report = this.buildReport(test, result, execution);
+    const traceGcsPath = await this.uploadTraceAttachmentIfPresent(result.attachments);
+    if (traceGcsPath) {
+      report.jobDetail.traceGcsPath = traceGcsPath;
+    }
 
     // Log report details
     console.log(`[TestChimp] Preparing to send report for test: ${test.title}`);
@@ -732,7 +743,9 @@ export class TestChimpReporter implements Reporter {
         .jpeg({ quality: 50 })
         .toBuffer();
       console.log(`[TestChimp] Converted to JPEG: ${jpegBuffer.length} bytes, calling uploadAttachment`);
-      const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg');
+      const uploadResp = await this.apiClient.uploadAttachment(jpegBuffer, 'image/jpeg', {
+        filename: 'screenshot.jpeg'
+      });
       const gcpPath = uploadResp.gcpPath;
       if (!gcpPath) {
         console.error('[TestChimp] uploadAttachment response missing gcpPath; cannot attach to steps');
@@ -752,6 +765,80 @@ export class TestChimpReporter implements Reporter {
       }
     } catch (error) {
       console.error('[TestChimp] ✗ Failed to upload screenshot attachment:', error);
+    }
+  }
+
+  private getTraceMaxBytes(): number {
+    const raw = getEnvVar('TESTCHIMP_TRACE_MAX_BYTES', '') || '';
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return TestChimpReporter.DEFAULT_TRACE_MAX_BYTES;
+  }
+
+  private isTraceAttachment(attachment: TestResult['attachments'][number]): boolean {
+    const name = (attachment.name || '').toLowerCase();
+    const contentType = (attachment.contentType || '').toLowerCase();
+    const filePath = (attachment.path || '').toLowerCase();
+    return (
+      contentType.includes('zip') ||
+      name.includes('trace') ||
+      filePath.endsWith('.zip')
+    );
+  }
+
+  private async uploadTraceAttachmentIfPresent(attachments: TestResult['attachments']): Promise<string | undefined> {
+    if (!this.apiClient) {
+      return undefined;
+    }
+
+    const traceAttachment = [...attachments].reverse().find((a) => this.isTraceAttachment(a));
+    if (!traceAttachment) {
+      return undefined;
+    }
+
+    let traceBuffer: Buffer | null = null;
+    try {
+      if (traceAttachment.path) {
+        traceBuffer = fs.readFileSync(traceAttachment.path);
+      } else if (traceAttachment.body) {
+        traceBuffer = Buffer.from(traceAttachment.body);
+      }
+    } catch (error) {
+      console.error('[TestChimp] Failed to read trace attachment:', error);
+      return undefined;
+    }
+
+    if (!traceBuffer || traceBuffer.length === 0) {
+      console.warn('[TestChimp] Trace attachment is empty; skipping upload');
+      return undefined;
+    }
+
+    const maxBytes = this.getTraceMaxBytes();
+    if (traceBuffer.length > maxBytes) {
+      console.warn(`[TestChimp] Trace attachment too large (${traceBuffer.length} bytes > ${maxBytes} bytes); skipping upload`);
+      return undefined;
+    }
+
+    const contentType = traceAttachment.contentType || 'application/zip';
+    const filename = traceAttachment.path
+      ? path.basename(traceAttachment.path)
+      : `${(traceAttachment.name || 'trace').replace(/[^a-zA-Z0-9._-]/g, '_')}.zip`;
+    try {
+      const uploadResp = await this.apiClient.uploadAttachment(traceBuffer, contentType, {
+        filename,
+        timeoutMs: TestChimpReporter.DEFAULT_TRACE_UPLOAD_TIMEOUT_MS,
+        maxRetries: TestChimpReporter.DEFAULT_TRACE_UPLOAD_RETRIES
+      });
+      if (this.options.verbose) {
+        console.log(`[TestChimp] Trace uploaded (${traceBuffer.length} bytes): ${uploadResp.gcpPath}`);
+      }
+      return uploadResp.gcpPath;
+    } catch (error) {
+      // Non-blocking by design: test execution should still be reported.
+      console.error('[TestChimp] Trace upload failed (continuing without trace):', error);
+      return undefined;
     }
   }
 

@@ -78,6 +78,7 @@ export interface SmartTestExecutionJobDetail {
   /** All retry attempts (platform mode); each entry has retryCount, steps, status, error */
   retryAttemptLogs?: RetryAttemptLog[];
   pwError?: PlaywrightError;
+  traceGcsPath?: string;
 }
 
 export interface SmartTestExecutionReport {

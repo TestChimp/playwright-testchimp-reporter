@@ -131,38 +131,61 @@ export class TestChimpApiClient {
    * Upload a single attachment (e.g. compressed screenshot) to the backend.
    * Uses multipart/form-data and returns the parsed response (expects { gcpPath }).
    */
-  async uploadAttachment(buffer: Buffer, contentType: string): Promise<{ gcpPath: string }> {
-    const form = new FormData();
-    // Filename is not used for storage (server generates ULID), but helps set content type.
-    form.append('file', buffer, {
-      filename: 'screenshot.jpeg',
-      contentType,
-    });
+  async uploadAttachment(
+    buffer: Buffer,
+    contentType: string,
+    options?: { filename?: string; timeoutMs?: number; maxRetries?: number }
+  ): Promise<{ gcpPath: string }> {
+    const filename = options?.filename || 'attachment.bin';
+    const timeoutMs = options?.timeoutMs ?? 120_000;
+    const maxRetries = options?.maxRetries ?? 2;
 
-    try {
-      const response = await this.client.post('/api/upload_attachment', form, {
-        headers: {
-          // Let form-data set the correct multipart boundary & content type.
-          ...form.getHeaders(),
-        },
-      });
-      const data = response.data;
-      
-      const gcpPath = data.gcpPath;
-      if (!gcpPath) {
-        console.error('[TestChimp] upload_attachment response missing gcpPath. Keys:', Object.keys(data || {}));
-        throw new Error('[TestChimp] upload_attachment response missing gcpPath');
-      }
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const form = new FormData();
+        // Filename is not used for storage (server generates ULID), but helps set content type.
+        form.append('file', buffer, {
+          filename,
+          contentType,
+        });
 
-      return { gcpPath };
-    } catch (error) {
-      if (error instanceof AxiosError) {
-        const status = error.response?.status;
-        const message = error.response?.data?.message || error.message;
-        console.error(`[TestChimp] upload_attachment error (${status}): ${message}`);
+        const response = await this.client.post('/api/upload_attachment', form, {
+          headers: {
+            // Let form-data set the correct multipart boundary & content type.
+            ...form.getHeaders(),
+          },
+          timeout: timeoutMs
+        });
+        const data = response.data;
+
+        const gcpPath = data.gcpPath;
+        if (!gcpPath) {
+          console.error('[TestChimp] upload_attachment response missing gcpPath. Keys:', Object.keys(data || {}));
+          throw new Error('[TestChimp] upload_attachment response missing gcpPath');
+        }
+
+        return { gcpPath };
+      } catch (error) {
+        lastError = error;
+        if (error instanceof AxiosError) {
+          const status = error.response?.status;
+          const message = error.response?.data?.message || error.message;
+          console.error(`[TestChimp] upload_attachment error (${status}) attempt=${attempt + 1}/${maxRetries + 1}: ${message}`);
+          const retriable = !status || status >= 500 || status === 408 || status === 429;
+          if (!retriable || attempt >= maxRetries) {
+            break;
+          }
+        } else if (attempt >= maxRetries) {
+          break;
+        }
+
+        // Exponential backoff: 300ms, 600ms, 1200ms
+        const sleepMs = 300 * Math.pow(2, attempt);
+        await new Promise((resolve) => setTimeout(resolve, sleepMs));
       }
-      throw error;
     }
+    throw lastError instanceof Error ? lastError : new Error('[TestChimp] upload_attachment failed');
   }
 
   /**

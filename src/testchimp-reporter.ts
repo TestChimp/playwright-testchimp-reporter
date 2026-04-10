@@ -138,8 +138,8 @@ export class TestChimpReporter implements Reporter {
 
     // In repair mode we allow reporting to scriptservice localhost without an API key.
     // (API client still requires a header value, so we pass a dummy string.)
-    if ((!apiKey || !projectId) && this.options.executionMode !== 'repair') {
-      console.warn('[TestChimp] Missing TESTCHIMP_API_KEY or TESTCHIMP_PROJECT_ID. Reporting disabled.');
+    if (!apiKey && this.options.executionMode !== 'repair') {
+      console.warn('[TestChimp] Missing TESTCHIMP_API_KEY. Reporting disabled.');
       this.isEnabled = false;
       return;
     }

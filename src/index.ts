@@ -20,7 +20,7 @@
  *
  * Environment Variables:
  * - TESTCHIMP_API_KEY (required): API key for authentication
- * - TESTCHIMP_PROJECT_ID (required): Project identifier
+ * - TESTCHIMP_PROJECT_ID (optional): Project identifier; omit when using API-key–only auth
  * - TESTCHIMP_API_URL (optional): API URL (default: https://api.testchimp.io)
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier

@@ -130,7 +130,7 @@ export interface TestChimpReporterOptions {
   platformBackendUrl?: string;
   /** Override TESTCHIMP_BATCH_INVOCATION_ID env var - when set (e.g. by platform), reporter uses this instead of generating one */
   batchInvocationId?: string;
-  /** Override TESTCHIMP_PROJECT_ID env var */
+  /** Override TESTCHIMP_PROJECT_ID env var (optional; server resolves project from API key when omitted) */
   projectId?: string;
   /** Override TESTCHIMP_TESTS_FOLDER env var - base folder for relative path calculation */
   testsFolder?: string;

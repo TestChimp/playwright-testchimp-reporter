@@ -81,18 +81,17 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TESTCHIMP_API_KEY` | Yes | API key for TestChimp. |
-| `TESTCHIMP_PROJECT_ID` | Yes | TestChimp project ID. |
+| `TESTCHIMP_PROJECT_ID` | No | Legacy/optional; the backend resolves the project from the API key when omitted. |
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
 
-If `TESTCHIMP_API_KEY` or `TESTCHIMP_PROJECT_ID` is missing, the reporter logs a warning and disables reporting (no request is sent).
+If `TESTCHIMP_API_KEY` is missing, the reporter logs a warning and disables reporting (no request is sent).
 
 ### 3. Run tests
 
 ```bash
 export TESTCHIMP_API_KEY=your-api-key
-export TESTCHIMP_PROJECT_ID=your-project-id
 npx playwright test
 ```
 
@@ -108,7 +107,7 @@ You can pass options in `playwright.config.ts`:
 ['playwright-testchimp-reporter', {
   apiKey: '...',           // override env (not recommended in CI)
   backendUrl: '...',       // override TESTCHIMP_BACKEND_URL
-  projectId: '...',       // override env
+  projectId: '...',       // optional override env
   testsFolder: 'tests',   // base dir for relative path calculation
   release: '1.0.0',
   environment: 'staging',
@@ -150,7 +149,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 ## Troubleshooting
 
 - **“Reporting disabled”**  
-  Set `TESTCHIMP_API_KEY` and `TESTCHIMP_PROJECT_ID` (or pass them in reporter options). The reporter will skip sending if either is missing.
+  Set `TESTCHIMP_API_KEY` (or pass it in reporter options). `TESTCHIMP_PROJECT_ID` is optional.
 
 - **No steps or only some steps**  
   Only steps with category `test.step`, `expect`, or `pw:api` are reported. Internal/hook steps are excluded.

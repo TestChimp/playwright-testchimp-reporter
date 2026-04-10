@@ -59,20 +59,27 @@ function toCamelCase(obj: unknown): unknown {
  */
 export class TestChimpApiClient {
   private client: AxiosInstance;
+  private apiKey: string;
   private projectId: string;
   private verbose: boolean;
 
   constructor(apiUrl: string, apiKey: string, projectId: string, verbose: boolean = false) {
+    this.apiKey = apiKey;
     this.projectId = projectId;
     this.verbose = verbose;
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'testchimp-api-key': apiKey
+    };
+    const trimmedProject = projectId?.trim();
+    if (trimmedProject) {
+      headers['project-id'] = trimmedProject;
+    }
+
     this.client = axios.create({
       baseURL: apiUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'testchimp-api-key': apiKey,
-        'project-id': projectId
-      },
+      headers,
       timeout: 30000
     });
   }
@@ -119,7 +126,9 @@ export class TestChimpApiClient {
         console.error(`[TestChimp] API error (${status}): ${message}`);
 
         if (status === 401 || status === 403) {
-          throw new Error(`[TestChimp] Authentication failed. Check TESTCHIMP_API_KEY and TESTCHIMP_PROJECT_ID.`);
+          throw new Error(
+            `[TestChimp] Authentication failed. Check TESTCHIMP_API_KEY (TESTCHIMP_PROJECT_ID is optional; the backend resolves the project from the API key).`
+          );
         }
       }
 
@@ -234,7 +243,7 @@ export class TestChimpApiClient {
    * Check if the client is properly configured
    */
   isConfigured(): boolean {
-    return !!this.projectId;
+    return !!this.apiKey?.trim();
   }
 
   /**

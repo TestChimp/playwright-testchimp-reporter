@@ -1,13 +1,13 @@
 /**
  * TrueCoverage runtime: injects CITestInfo into the browser so testchimp-rum-js can
  * send the ci-test-info header on RUM ingest requests.
- * Import once in playwright.config.js: import 'playwright-testchimp-reporter/runtime';
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { test } from '@playwright/test';
 import { derivePathsFromTestInfo, deriveTestsFolder, getBranchName } from './utils';
+export * from './worldstate';
 
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 

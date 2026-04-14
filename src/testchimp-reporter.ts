@@ -60,7 +60,7 @@ interface RetryInfo {
  * // playwright.config.ts
  * export default defineConfig({
  *   reporter: [
- *     ['playwright-testchimp-reporter', {
+ *     ['playwright-testchimp/reporter', {
  *       verbose: true,
  *       reportOnlyFinalAttempt: true
  *     }]

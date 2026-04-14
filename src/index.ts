@@ -1,5 +1,5 @@
 /**
- * playwright-testchimp-reporter
+ * playwright-testchimp
  *
  * Playwright reporter for TestChimp test execution tracking and coverage reporting.
  *
@@ -10,7 +10,7 @@
  * export default defineConfig({
  *   reporter: [
  *     ['list'],
- *     ['playwright-testchimp-reporter', {
+ *     ['playwright-testchimp/reporter', {
  *       verbose: true,
  *       reportOnlyFinalAttempt: true,
  *       captureScreenshots: true
@@ -31,6 +31,7 @@ export { TestChimpReporter } from './testchimp-reporter';
 export { TestChimpApiClient } from './api-client';
 export * from './types';
 export * from './utils';
+export * from './worldstate';
 
 // Default export for Playwright reporter configuration
 import { TestChimpReporter } from './testchimp-reporter';

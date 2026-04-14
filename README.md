@@ -1,4 +1,4 @@
-# playwright-testchimp-reporter
+# playwright-testchimp
 
 A [Playwright](https://playwright.dev/) reporter that sends test execution results to the [TestChimp](https://testchimp.io) platform. It powers **QA intelligence insights**, surfaces **AI-native steps** (e.g. `ai.act`, `ai.verify`) from the standard Playwright runner into TestChimp for CI, and **augments RUM events** from [testchimp-rum-js](https://www.npmjs.com/package/testchimp-rum-js) so test runs align with real user events for **TrueCoverage**.
 
@@ -36,7 +36,7 @@ Read more about TestChimps' TrueCoverage feature [here](https://docs.testchimp.i
 ## Installation
 
 ```bash
-npm install playwright-testchimp-reporter
+npm install playwright-testchimp
 ```
 
 Peer dependency: `@playwright/test` (e.g. `>=1.40.0`).
@@ -59,7 +59,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   reporter: [
     ['list'],
-    ['playwright-testchimp-reporter', {
+    ['playwright-testchimp/reporter', {
       verbose: true,
       reportOnlyFinalAttempt: true,
       captureScreenshots: true,
@@ -71,7 +71,7 @@ export default defineConfig({
 For TrueCoverage, add the following import in your tests:
 
 ```
-import 'playwright-testchimp-reporter/runtime';
+import 'playwright-testchimp/runtime';
 ```
 
 ### 2. Environment variables
@@ -104,7 +104,7 @@ Results are reported to TestChimp after each test (or after the final attempt wh
 You can pass options in `playwright.config.ts`:
 
 ```ts
-['playwright-testchimp-reporter', {
+['playwright-testchimp/reporter', {
   apiKey: '...',           // override env (not recommended in CI)
   backendUrl: '...',       // override TESTCHIMP_BACKEND_URL
   projectId: '...',       // optional override env
@@ -140,16 +140,17 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 ## Exports
 
-- **Default**: `TestChimpReporter` (for use in `reporter` array).
+- **Subpath**: `playwright-testchimp/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
-- **Subpath**: `playwright-testchimp-reporter/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
+- **Subpath**: `playwright-testchimp/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
+- **Subpath**: `playwright-testchimp/worldstate` — exports `defineWorldState` and `ensureWorldState` for world-state setup/teardown in tests.
 
 ---
 
 ## Troubleshooting
 
 - **“Reporting disabled”**  
-  Set `TESTCHIMP_API_KEY` (or pass it in reporter options). `TESTCHIMP_PROJECT_ID` is optional.
+  Set `TESTCHIMP_API_KEY` (or pass it in reporter options). `TESTCHIMP_PROJECT_ID` should be present to enable TrueCoverage.
 
 - **No steps or only some steps**  
   Only steps with category `test.step`, `expect`, or `pw:api` are reported. Internal/hook steps are excluded.
@@ -158,7 +159,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
 
 - **RUM events not linked to tests**  
-  Ensure you `import 'playwright-testchimp-reporter/runtime'` in the test files.
+  Ensure you `import 'playwright-testchimp/runtime'` in the test files.
 
 - **Verbose logging**  
   Set `verbose: true` in reporter options or use it during setup to see which steps are captured and when reports are sent.

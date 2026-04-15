@@ -92,7 +92,7 @@ function ensureRegistryLoaded(): void {
   }
 }
 
-function getWorldStateById(id: string): WorldStateDefinition {
+export function getWorldStateById(id: string): WorldStateDefinition {
   ensureRegistryLoaded();
 
   const entry = registry.get(id);
@@ -109,6 +109,27 @@ function getWorldStateById(id: string): WorldStateDefinition {
   }
 
   return entry.loaded;
+}
+
+/**
+ * Run teardown for a world-state using a fresh context object.
+ * Use when you did not keep the {@link ensureWorldState} return value (e.g. simplified-view codegen).
+ * World-states whose teardown depends on the exact same ctx instance setup mutated are not supported here.
+ */
+export async function teardownWorldState(
+  id: string,
+  ctx: Record<string, unknown> = {},
+): Promise<void> {
+  const state = getWorldStateById(id);
+  if (state.teardown) {
+    await state.teardown(ctx);
+  }
+}
+
+/** @internal Reset registry between tests (Node test runner). */
+export function __resetWorldStateRegistryForTests(): void {
+  registry.clear();
+  registryInitialized = false;
 }
 
 export function defineWorldState<TContext extends Record<string, unknown> = Record<string, unknown>>(

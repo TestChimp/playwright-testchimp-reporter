@@ -1,6 +1,6 @@
 {
   "name": "playwright-testchimp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Playwright reporter for TestChimp test execution tracking and coverage reporting",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,10 +15,14 @@
     },
     "./runtime": {
       "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.mjs",
+      "require": "./dist/runtime.js",
       "default": "./dist/runtime.js"
     },
     "./worldstate": {
       "types": "./dist/worldstate.d.ts",
+      "import": "./dist/worldstate.mjs",
+      "require": "./dist/worldstate.js",
       "default": "./dist/worldstate.js"
     }
   },

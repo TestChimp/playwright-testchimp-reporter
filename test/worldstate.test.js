@@ -7,11 +7,7 @@ const os = require('os');
 const worldstatePath = path.join(__dirname, '..', 'dist', 'worldstate.js');
 
 test('teardownWorldState runs teardown with empty ctx', async () => {
-  const {
-    defineWorldState,
-    teardownWorldState,
-    __resetWorldStateRegistryForTests,
-  } = require(worldstatePath);
+  const { teardownWorldState, __resetWorldStateRegistryForTests } = require(worldstatePath);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-ws-'));
   const prev = process.cwd();
@@ -33,7 +29,6 @@ globalThis.__wsTeardownRan = () => ran;
     process.chdir(dir);
     __resetWorldStateRegistryForTests();
     await teardownWorldState('ws-x');
-    const mod = require(path.join(dir, 'x.world.js'));
     assert.equal(typeof globalThis.__wsTeardownRan, 'function');
     assert.equal(globalThis.__wsTeardownRan(), true);
   } finally {
@@ -45,8 +40,7 @@ globalThis.__wsTeardownRan = () => ran;
 });
 
 test('nested ensureWorldState in another world-state setup runs prerequisite first', async () => {
-  const { defineWorldState, ensureWorldState, __resetWorldStateRegistryForTests } =
-    require(worldstatePath);
+  const { ensureWorldState, __resetWorldStateRegistryForTests } = require(worldstatePath);
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-ws-nested-'));
   const prev = process.cwd();
@@ -91,5 +85,40 @@ module.exports = defineWorldState({
     __resetWorldStateRegistryForTests();
     fs.rmSync(dir, { recursive: true, force: true });
     delete globalThis.__wsOrder;
+  }
+});
+
+test('ensureWorldState loads ESM *.world.js with import/export', async () => {
+  const { ensureWorldState, __resetWorldStateRegistryForTests } = require(worldstatePath);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-ws-esm-'));
+  const prev = process.cwd();
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
+    fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
+    const pkgRoot = path.join(__dirname, '..');
+    fs.symlinkSync(pkgRoot, path.join(dir, 'node_modules', 'playwright-testchimp'), 'dir');
+
+    fs.writeFileSync(
+      path.join(dir, 'esm.world.js'),
+      `
+import { defineWorldState } from 'playwright-testchimp/worldstate';
+export default defineWorldState({
+  meta: { id: 'esm-ws', description: 'esm' },
+  async setup(ctx) { globalThis.__esmRan = (ctx && ctx.ok) === true; },
+});
+`,
+      'utf8',
+    );
+
+    process.chdir(dir);
+    __resetWorldStateRegistryForTests();
+    await ensureWorldState('esm-ws', { ok: true });
+    assert.equal(globalThis.__esmRan, true);
+  } finally {
+    process.chdir(prev);
+    __resetWorldStateRegistryForTests();
+    fs.rmSync(dir, { recursive: true, force: true });
+    delete globalThis.__esmRan;
   }
 });

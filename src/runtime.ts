@@ -5,7 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { test } from '@playwright/test';
+import { createRequire } from 'module';
 import { derivePathsFromTestInfo, deriveTestsFolder, getBranchName } from './utils';
 export * from './worldstate';
 
@@ -24,7 +24,13 @@ function readBatchInvocationId(projectRootDir: string): string | undefined {
   }
 }
 
-test.beforeEach(async ({ page }, testInfo) => {
+// IMPORTANT: resolve @playwright/test from the *consumer* project, not from this package.
+// This avoids "Requiring @playwright/test second time" when developing via `file:`/linked installs.
+const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const { test } = pwRequire('@playwright/test') as any;
+
+test.beforeEach(async ({ page }: { page: any }, testInfo: any) => {
   const project = testInfo.project as { rootDir?: string };
   const projectRootDir = project.rootDir ?? process.cwd();
   const testsFolder = deriveTestsFolder(projectRootDir);

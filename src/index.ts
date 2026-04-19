@@ -31,7 +31,6 @@ export { TestChimpReporter } from './testchimp-reporter';
 export { TestChimpApiClient } from './api-client';
 export * from './types';
 export * from './utils';
-export * from './worldstate';
 
 // Default export for Playwright reporter configuration
 import { TestChimpReporter } from './testchimp-reporter';

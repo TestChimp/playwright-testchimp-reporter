@@ -7,8 +7,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createRequire } from 'module';
 import { derivePathsFromTestInfo, deriveTestsFolder, getBranchName } from './utils';
-export * from './worldstate';
-
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 
 function readBatchInvocationId(projectRootDir: string): string | undefined {

@@ -143,7 +143,6 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **Subpath**: `playwright-testchimp/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
 - **Subpath**: `playwright-testchimp/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
-- **Subpath**: `playwright-testchimp/worldstate` — exports `defineWorldState`, `ensureWorldState`, `getWorldStateById`, and `teardownWorldState` for world-state setup/teardown in tests (same symbols are also available from `playwright-testchimp/runtime`).
 
 ---
 

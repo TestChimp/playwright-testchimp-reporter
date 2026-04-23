@@ -1,5 +1,5 @@
 /**
- * TrueCoverage runtime: injects CITestInfo into the browser so testchimp-rum-js can
+ * TrueCoverage runtime: injects CITestInfo into the browser so @testchimp/rum-js can
  * send the ci-test-info header on RUM ingest requests.
  */
 

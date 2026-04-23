@@ -1,6 +1,6 @@
-# playwright-testchimp
+# @testchimp/playwright
 
-A [Playwright](https://playwright.dev/) reporter that sends test execution results to the [TestChimp](https://testchimp.io) platform. It powers **QA intelligence insights**, surfaces **AI-native steps** (e.g. `ai.act`, `ai.verify`) from the standard Playwright runner into TestChimp for CI, and **augments RUM events** from [testchimp-rum-js](https://www.npmjs.com/package/testchimp-rum-js) so test runs align with real user events for **TrueCoverage**.
+A [Playwright](https://playwright.dev/) reporter that sends test execution results to the [TestChimp](https://testchimp.io) platform. It powers **QA intelligence insights**, surfaces **AI-native steps** (e.g. `ai.act`, `ai.verify`) from the standard Playwright runner into TestChimp for CI, and **augments RUM events** from [@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) so test runs align with real user events for **TrueCoverage**.
 
 ---
 
@@ -21,9 +21,9 @@ You run tests with the normal Playwright CLI or via your CI (GitHub Actions etc.
 
 The reporter plugin pipes AI-native step calls (`ai.act`, `ai.verify`, etc.) via TestChimp backends, so that those steps work seamlessly—wherever you run your tests (local, CI, or any environment).
 
-### 3. Augment testchimp-rum-js events for TrueCoverage (test ↔ real user alignment)
+### 3. Augment @testchimp/rum-js events for TrueCoverage (test ↔ real user alignment)
 
-[testchimp-rum-js](https://www.npmjs.com/package/testchimp-rum-js) emits real user events from the browser to TestChimp. When the same app is exercised **in CI by Playwright**, you want those events to be tagged with **which test** produced them so TestChimp can:
+[@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) emits real user events from the browser to TestChimp. When the same app is exercised **in CI by Playwright**, you want those events to be tagged with **which test** produced them so TestChimp can:
 
 - Align test runs with real user sessions (TrueCoverage)
 - See which tests generated which events
@@ -36,7 +36,7 @@ Read more about TestChimps' TrueCoverage feature [here](https://docs.testchimp.i
 ## Installation
 
 ```bash
-npm install playwright-testchimp
+npm install @testchimp/playwright
 ```
 
 Peer dependency: `@playwright/test` (e.g. `>=1.40.0`).
@@ -53,13 +53,13 @@ Configure the reporter in your playwright.config.js like below:
 // playwright.config.ts
 import { defineConfig } from '@playwright/test';
 
-// Optional: import runtime so CI test info is injected for testchimp-rum-js (TrueCoverage)
+// Optional: import runtime so CI test info is injected for @testchimp/rum-js (TrueCoverage)
 
 
 export default defineConfig({
   reporter: [
     ['list'],
-    ['playwright-testchimp/reporter', {
+    ['@testchimp/playwright/reporter', {
       verbose: true,
       reportOnlyFinalAttempt: true,
       captureScreenshots: true,
@@ -71,7 +71,7 @@ export default defineConfig({
 For TrueCoverage, add the following import in your tests:
 
 ```
-import 'playwright-testchimp/runtime';
+import '@testchimp/playwright/runtime';
 ```
 
 ### 2. Environment variables
@@ -104,7 +104,7 @@ Results are reported to TestChimp after each test (or after the final attempt wh
 You can pass options in `playwright.config.ts`:
 
 ```ts
-['playwright-testchimp/reporter', {
+['@testchimp/playwright/reporter', {
   apiKey: '...',           // override env (not recommended in CI)
   backendUrl: '...',       // override TESTCHIMP_BACKEND_URL
   projectId: '...',       // optional override env
@@ -140,9 +140,9 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 ## Exports
 
-- **Subpath**: `playwright-testchimp/reporter` — explicit reporter entry for Playwright `reporter` config.
+- **Subpath**: `@testchimp/playwright/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
-- **Subpath**: `playwright-testchimp/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
+- **Subpath**: `@testchimp/playwright/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
 
 ---
 
@@ -158,7 +158,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
 
 - **RUM events not linked to tests**  
-  Ensure you `import 'playwright-testchimp/runtime'` in the test files.
+  Ensure you `import '@testchimp/playwright/runtime'` in the test files.
 
 - **Verbose logging**  
   Set `verbose: true` in reporter options or use it during setup to see which steps are captured and when reports are sent.

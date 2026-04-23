@@ -1,5 +1,5 @@
 /**
- * playwright-testchimp
+ * @testchimp/playwright
  *
  * Playwright reporter for TestChimp test execution tracking and coverage reporting.
  *
@@ -10,7 +10,7 @@
  * export default defineConfig({
  *   reporter: [
  *     ['list'],
- *     ['playwright-testchimp/reporter', {
+ *     ['@testchimp/playwright/reporter', {
  *       verbose: true,
  *       reportOnlyFinalAttempt: true,
  *       captureScreenshots: true

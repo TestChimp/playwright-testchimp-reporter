@@ -333,6 +333,7 @@ export function deriveTestsFolder(_projectRootDir: string): string {
 export function getBranchName(): string | undefined {
   const fromEnv =
     process.env.TESTCHIMP_BRANCH_NAME ||
+    process.env.TESTCHIMP_BRANCH ||
     process.env.CI_COMMIT_REF_NAME ||
     process.env.GIT_BRANCH ||
     process.env.BRANCH_NAME;

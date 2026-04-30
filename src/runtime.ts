@@ -33,7 +33,14 @@ function readBatchInvocationId(projectRootDir: string): string | undefined {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function installTrueCoverage(test: any): any {
-  test.beforeEach(async ({ page }: { page: any }, testInfo: any) => {
+  // Use a page fixture override instead of beforeEach hooks.
+  //
+  // In Playwright, fixtures can navigate during setup. When CI info injection is only in `beforeEach`,
+  // a page may emit RUM before the hook runs, causing missing ci-test-info headers. Overriding the
+  // `page` fixture ensures the injection happens before user test code sees the page.
+  return test.extend({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    page: async ({ page }: { page: any }, use: any, testInfo: any) => {
     const project = testInfo.project as { rootDir?: string };
     const projectRootDir = project.rootDir ?? process.cwd();
     const testsFolder = deriveTestsFolder(projectRootDir);
@@ -52,10 +59,9 @@ export function installTrueCoverage(test: any): any {
     };
     const branchName = getBranchName();
     if (branchName) ciTestInfo.branchName = branchName;
-    const env =
-      process.env.TESTCHIMP_ENV || process.env.CI_ENVIRONMENT_NAME || process.env.NODE_ENV;
-    if (env) ciTestInfo.environment = env;
-    const release = process.env.TESTCHIMP_RELEASE;
+    const env = process.env.TESTCHIMP_ENV || process.env.TESTCHIMP_ENVIRONMENT;
+    if (env) ciTestInfo.environment = String(env).trim();
+    const release = process.env.TESTCHIMP_RELEASE || process.env.TESTCHIMP_RELEASE_NAME;
     if (release) ciTestInfo.release = release;
     const batchInvocationId = readBatchInvocationId(projectRootDir);
     if (batchInvocationId) ciTestInfo.batchInvocationId = batchInvocationId;
@@ -79,8 +85,10 @@ export function installTrueCoverage(test: any): any {
     } catch {
       // Ignore: page may be closed or not ready yet.
     }
+
+      await use(page);
+    },
   });
-  return test;
 }
 
 // IMPORTANT: resolve @playwright/test from the *consumer* project, not from this package.

@@ -63,10 +63,22 @@ export function installTrueCoverage(test: any): any {
     const jsonString = JSON.stringify(ciTestInfo);
     await page.addInitScript(
       (info: string) => {
+        // Browser main thread: globalThis is window.
         (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
       },
       jsonString
     );
+
+    // Also set on the currently loaded page (if any). `addInitScript` only affects future documents,
+    // so without this, apps that initialize RUM on the first loaded document can emit events before
+    // the init script ever runs.
+    try {
+      await page.evaluate((info: string) => {
+        (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+      }, jsonString);
+    } catch {
+      // Ignore: page may be closed or not ready yet.
+    }
   });
   return test;
 }

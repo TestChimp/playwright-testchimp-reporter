@@ -646,8 +646,15 @@ export class TestChimpReporter implements Reporter {
       case 'timedOut':
         return SmartTestExecutionStatus.SMART_TEST_EXECUTION_FAILED;
       case 'skipped':
+        return SmartTestExecutionStatus.SMART_TEST_EXECUTION_SKIPPED;
       case 'interrupted':
+        return SmartTestExecutionStatus.SMART_TEST_EXECUTION_INTERRUPTED;
       default:
+        if (playwrightStatus) {
+          console.warn(
+            `[TestChimp] mapStatus: unknown Playwright result.status "${playwrightStatus}" — storing UNKNOWN_SMART_TEST_EXECUTION_STATUS`
+          );
+        }
         return SmartTestExecutionStatus.UNKNOWN_SMART_TEST_EXECUTION_STATUS;
     }
   }

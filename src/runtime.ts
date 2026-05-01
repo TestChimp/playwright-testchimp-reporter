@@ -13,6 +13,9 @@ import * as path from 'path';
 import { createRequire } from 'module';
 import { derivePathsFromTestInfo, deriveTestsFolder, getBranchName } from './utils';
 
+/** Resolve `@playwright/test` from the consumer project (same as `installTrueCoverage` side-effect path). */
+const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 
 function readBatchInvocationId(projectRootDir: string): string | undefined {
@@ -91,8 +94,33 @@ export function installTrueCoverage(test: any): any {
   });
 }
 
-// IMPORTANT: resolve @playwright/test from the *consumer* project, not from this package.
-const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+const DEFAULT_SCREEN_STATE = 'default';
+
+/**
+ * Marks the current logical screen/state so it appears as a Playwright **step** in traces and reporters.
+ * Call from inside a test (or hook) after the UI has reached a stable state.
+ *
+ * @param screenName logical screen (e.g. "Login", "Dashboard")
+ * @param stateName optional state within the screen; defaults to `"default"`
+ */
+export async function markScreenState(screenName: string, stateName?: string): Promise<void> {
+  const screen = String(screenName ?? '').trim();
+  if (!screen) {
+    return;
+  }
+  const state =
+    stateName != null && String(stateName).trim() !== ''
+      ? String(stateName).trim()
+      : DEFAULT_SCREEN_STATE;
+  const title = `ScreenState: ${screen} | ${state}`;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { test } = pwRequire('@playwright/test') as any;
+  await test.step(title, async () => {
+    // eslint-disable-next-line no-console
+    console.log(`reached ${screen} | ${state}`);
+  });
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { test: rootTest } = pwRequire('@playwright/test') as any;
 

@@ -31,8 +31,35 @@ import {
   parseExploreChimpLongTaskThresholdMs,
   resetExploreChimpPerfMetricsBuffers,
 } from './perf-metrics';
+import {
+  DataSourceEnum,
+  type AnalyzeDataSourcesRequest,
+  type ApiRequestsPayload,
+  type ConsoleLogEntry,
+  type ConsoleLogsPayload,
+  type DomSnapshotPayload,
+  type MetricsPayload,
+  type RequestResponsePair,
+} from './agents-explorechimp-json';
 import { cleanHtml } from './clean-html';
 import { compactAxeResultsForUpload } from './axe-compact';
+
+export { DataSourceEnum };
+export type {
+  AnalyzeDataSourcesRequest,
+  ApiRequestsPayload,
+  BoundingBox,
+  ConsoleLogEntry,
+  ConsoleLogsPayload,
+  DataSource,
+  DomSnapshotPayload,
+  InteractionLatencyEntry,
+  LongTaskDetail,
+  MetricsPayload,
+  RequestResponsePair,
+  ResourceTimingEntry,
+  ScreenState,
+} from './agents-explorechimp-json';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -41,16 +68,6 @@ const K_BUF = '__testchimpExploreChimpBuffers';
 const K_HOOKED = '__testchimpExploreChimpHooked';
 
 type PageAugmented = Page & Record<string, unknown>;
-
-/** Matches scriptservice / protos/agents DataSource numeric values (user-facing sources only). */
-export const DataSourceEnum = {
-  UNKNOWN_DATA_SOURCE: 0,
-  DOM_SOURCE: 1,
-  SCREENSHOT_SOURCE: 2,
-  NETWORK_SOURCE: 3,
-  CONSOLE_SOURCE: 4,
-  METRICS_SOURCE: 5,
-} as const;
 
 export interface ExploreChimpPageMeta {
   journeyExecutionId: string;
@@ -147,7 +164,7 @@ async function uploadScreenshot(client: AxiosInstance, buffer: Buffer): Promise<
   return gcpPath;
 }
 
-async function postAnalyze(client: AxiosInstance, body: Record<string, unknown>): Promise<void> {
+async function postAnalyze(client: AxiosInstance, body: AnalyzeDataSourcesRequest): Promise<void> {
   await client.post('/smart-test/analyze_explorechimp_data_sources', body);
 }
 
@@ -182,52 +199,28 @@ function headersToRecord(headers: { [name: string]: string }): Record<string, st
   return out;
 }
 
-function consolePayload(rows: ConsoleRow[]): Record<string, { type?: string; text?: string; timestamp?: string }> {
-  const map: Record<string, { type?: string; text?: string; timestamp?: string }> = {};
+function buildConsoleLogsPayload(rows: ConsoleRow[]): ConsoleLogsPayload {
+  const consoleLogs: Record<string, ConsoleLogEntry> = {};
   const slice = rows.slice(-MAX_CONSOLE);
   slice.forEach((r, i) => {
-    map[String(i)] = {
+    consoleLogs[String(i)] = {
       type: r.type,
       text: truncate(r.text, MAX_CONSOLE_MSG),
-      timestamp: String(r.timestamp),
+      timestamp: String(Math.trunc(r.timestamp)),
     };
   });
-  return map;
+  return { consoleLogs };
 }
 
-function networkPayload(rows: NetworkRow[]): {
-  requests: Record<
-    string,
-    {
-      url?: string;
-      method?: string;
-      status?: number;
-      responseTimeMs?: number;
-      timestamp?: string;
-      requestHeaders?: Record<string, string>;
-      responseHeaders?: Record<string, string>;
-    }
-  >;
-} {
-  const requests: Record<
-    string,
-    {
-      url?: string;
-      method?: string;
-      status?: number;
-      responseTimeMs?: number;
-      timestamp?: string;
-      requestHeaders?: Record<string, string>;
-      responseHeaders?: Record<string, string>;
-    }
-  > = {};
+function buildApiRequestsPayload(rows: NetworkRow[]): ApiRequestsPayload {
+  const requests: Record<string, RequestResponsePair> = {};
   rows.slice(-MAX_NETWORK_ROWS).forEach((r, i) => {
     requests[String(i)] = {
       url: truncate(r.url, 2000),
       method: r.method,
       status: r.status,
       responseTimeMs: r.responseTimeMs,
-      timestamp: String(r.timestamp),
+      timestamp: String(Math.trunc(r.timestamp)),
       requestHeaders: r.requestHeaders,
       responseHeaders: r.responseHeaders,
     };
@@ -472,7 +465,7 @@ export async function runExploreChimpMarkScreenState(
           stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
           analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
           screenState: { name: prior.name, state: prior.state },
-          consoleLogsPayload: { consoleLogs: consolePayload(buffers.consoleRows) },
+          consoleLogsPayload: buildConsoleLogsPayload(buffers.consoleRows),
           networkRequestHash: '',
         });
       });
@@ -493,7 +486,7 @@ export async function runExploreChimpMarkScreenState(
             stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
             analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
             screenState: { name: prior.name, state: prior.state },
-            apiRequestsPayload: networkPayload(netRows),
+            apiRequestsPayload: buildApiRequestsPayload(netRows),
             networkRequestHash: hash,
           });
         });
@@ -502,7 +495,7 @@ export async function runExploreChimpMarkScreenState(
 
     if (sources.has('METRICS')) {
       const metricsTitle = `Analyzing Metrics for Screen-state ${prior.name} | ${prior.state}`;
-      let metricsPayload: Record<string, unknown> | null = null;
+      let metricsPayload: MetricsPayload | null = null;
       try {
         metricsPayload = await collectMetricsSince(page, buffers.metricsIntervalSinceMs);
       } catch {
@@ -564,6 +557,7 @@ export async function runExploreChimpMarkScreenState(
         Number.isFinite(domMaxParsed) && domMaxParsed > 0 ? domMaxParsed : 32000;
       const snapshot = cleanHtml(html, domMax);
       const axeResultsJson = compactAxeResultsForUpload(axeResults);
+      const domSnapshotPayload: DomSnapshotPayload = { snapshot };
       await postAnalyze(client, {
         explorationId,
         journeyExecutionId: meta.journeyExecutionId,
@@ -573,7 +567,7 @@ export async function runExploreChimpMarkScreenState(
         stepId: exploreChimpAnalyticsStepId(meta, domTitle),
         analyzedDataSource: DataSourceEnum.DOM_SOURCE,
         screenState: { name: current.name, state: current.state },
-        domSnapshotPayload: { snapshot },
+        domSnapshotPayload,
         axeResultsJson,
         networkRequestHash: '',
       });

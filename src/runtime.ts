@@ -36,7 +36,18 @@ function addMarkScreenStateFixture(test: any): any {
     markScreenState: async ({ page }: { page: Page }, use: any) => {
       const fn: MarkScreenStateFixture = async (screenName: string, stateName?: string) => {
         if (isExploreChimpEnabled()) {
-          await runExploreChimpMarkScreenState(page, screenName, stateName);
+          try {
+            await runExploreChimpMarkScreenState(page, screenName, stateName);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            // eslint-disable-next-line no-console
+            console.warn(`[TestChimp] ExploreChimp markScreenState failed (non-fatal): ${msg}`);
+            try {
+              await runTraceOnlyMarkScreenState(screenName, stateName);
+            } catch {
+              // Trace step is best-effort; never fail the test for analytics.
+            }
+          }
         } else {
           await runTraceOnlyMarkScreenState(screenName, stateName);
         }

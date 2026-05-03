@@ -1,9 +1,16 @@
 /**
- * Browser performance metrics for ExploreChimp local runs — mirrors scriptservice
- * `helpers/watcher.ts` (PerformanceObserver pipeline + getMetricsSince / resetMetrics).
+ * Browser performance metrics for ExploreChimp — builds {@link MetricsPayload}
+ * (`agents.proto`) in the page and returns it to Node.
  */
 
 import type { Page } from '@playwright/test';
+import type {
+  BoundingBox,
+  InteractionLatencyEntry,
+  LongTaskDetail,
+  MetricsPayload,
+  ResourceTimingEntry,
+} from './agents-explorechimp-json';
 
 export function parseExploreChimpLongTaskThresholdMs(): number {
   const raw = process.env.EXPLORECHIMP_LONG_TASK_THRESHOLD_MS?.trim();
@@ -27,7 +34,6 @@ export async function installExploreChimpPerfMetricsObservers(
         __perfMetrics?: { entries: PerfEntry[]; cls: number; startTime: number };
         __interactionMetrics?: InteractionRecord[];
         __resourceTimings?: ResourceRecord[];
-        __layoutShiftEntries?: LayoutShiftRecord[];
         performance: Performance;
       };
       g.__longTaskThreshold = threshold;
@@ -82,15 +88,7 @@ export async function installExploreChimpPerfMetricsObservers(
         resourceType?: string;
       };
 
-      type LayoutShiftRecord = {
-        value: number;
-        cumulative: number;
-        timestamp: number;
-        sources: unknown[];
-      };
-
       g.__perfMetrics = g.__perfMetrics || { entries: [], cls: 0, startTime: Date.now() };
-      g.__layoutShiftEntries = g.__layoutShiftEntries || [];
 
       function observeLcp(): void {
         try {
@@ -137,7 +135,6 @@ export async function installExploreChimpPerfMetricsObservers(
               const le = entry as {
                 hadRecentInput?: boolean;
                 value?: number;
-                sources?: unknown[];
               };
               if (!le.hadRecentInput) {
                 g.__perfMetrics!.cls += le.value || 0;
@@ -146,60 +143,6 @@ export async function installExploreChimpPerfMetricsObservers(
                   value: le.value || 0,
                   cumulative: g.__perfMetrics!.cls,
                   timestamp: Date.now(),
-                });
-                const sources = (le.sources || []).map((source: unknown) => {
-                  const s = source as {
-                    node?: Element & {
-                      tagName?: string;
-                      id?: string;
-                      className?: string;
-                      textContent?: string | null;
-                      getAttribute?: (n: string) => string | null;
-                    };
-                    currentRect?: DOMRectReadOnly;
-                    previousRect?: DOMRectReadOnly;
-                  };
-                  const node = s.node;
-                  const currentRect = s.currentRect;
-                  let element: Record<string, unknown> | undefined;
-                  if (node && currentRect) {
-                    const tag = node.tagName?.toLowerCase();
-                    const role = node.getAttribute?.('role') || undefined;
-                    const id = node.id || undefined;
-                    const syntheticId = node.getAttribute?.('data-synthetic-id') || undefined;
-                    const ariaLabel = node.getAttribute?.('aria-label') || undefined;
-                    let text: string | undefined;
-                    try {
-                      const tc = node.textContent || '';
-                      if (tc.trim()) text = tc.trim().substring(0, 100);
-                    } catch {
-                      /* ignore */
-                    }
-                    let className: string | undefined;
-                    try {
-                      const ca = node.getAttribute?.('class') || String(node.className || '');
-                      if (ca) className = ca.substring(0, 100);
-                    } catch {
-                      /* ignore */
-                    }
-                    element = { tag, role, text, id, className, syntheticId, ariaLabel };
-                  }
-                  const viewportWidth = window.innerWidth || 1;
-                  const viewportHeight = window.innerHeight || 1;
-                  const cr = currentRect || ({ left: 0, top: 0, width: 0, height: 0 } as DOMRectReadOnly);
-                  const boundingBox = {
-                    xPct: (cr.left / viewportWidth) * 100,
-                    yPct: (cr.top / viewportHeight) * 100,
-                    widthPct: (cr.width / viewportWidth) * 100,
-                    heightPct: (cr.height / viewportHeight) * 100,
-                  };
-                  return { element, boundingBox };
-                });
-                (g.__layoutShiftEntries as LayoutShiftRecord[]).push({
-                  value: le.value || 0,
-                  cumulative: g.__perfMetrics!.cls,
-                  timestamp: Date.now(),
-                  sources,
                 });
               }
             }
@@ -421,8 +364,37 @@ export async function installExploreChimpPerfMetricsObservers(
 export async function collectMetricsSince(
   page: Page,
   sinceTimestamp: number
-): Promise<Record<string, unknown> | null> {
-  return page.evaluate((since) => {
+): Promise<MetricsPayload> {
+  return page.evaluate<MetricsPayload, number>((since) => {
+    type InteractionRow = {
+      duration: number;
+      inputDelay?: number;
+      processingDuration?: number;
+      presentationDelay?: number;
+      eventType: string;
+      timestamp: number;
+      targetElementId?: string;
+      targetLocator?: string;
+      boundingBox?: { xPct: number; yPct: number; widthPct: number; heightPct: number };
+    };
+
+    type ResourceRow = {
+      url: string;
+      initiatorType: string;
+      duration: number;
+      dnsLookupMs?: number;
+      tcpConnectionMs?: number;
+      tlsNegotiationMs?: number;
+      requestTimeMs?: number;
+      responseTimeMs?: number;
+      transferSizeBytes?: number;
+      encodedSizeBytes?: number;
+      decodedSizeBytes?: number;
+      fromCache?: boolean;
+      timestamp: number;
+      resourceType?: string;
+    };
+
     const w = globalThis as unknown as {
       __perfMetrics?: {
         entries: Array<{
@@ -440,12 +412,54 @@ export async function collectMetricsSince(
         }>;
         cls: number;
       };
-      __interactionMetrics?: Array<Record<string, unknown>>;
-      __resourceTimings?: Array<Record<string, unknown>>;
-      __layoutShiftEntries?: Array<Record<string, unknown>>;
+      __interactionMetrics?: InteractionRow[];
+      __resourceTimings?: ResourceRow[];
     };
 
-    function fallbackFromPerformanceTimeline(): Record<string, unknown> {
+    function toProtoInteractionEntry(e: InteractionRow): InteractionLatencyEntry {
+      const row: InteractionLatencyEntry = {
+        duration: e.duration,
+        eventType: e.eventType,
+        timestamp: e.timestamp,
+      };
+      if (e.inputDelay !== undefined) row.inputDelay = e.inputDelay;
+      if (e.processingDuration !== undefined) row.processingDuration = e.processingDuration;
+      if (e.presentationDelay !== undefined) row.presentationDelay = e.presentationDelay;
+      if (e.targetElementId !== undefined) row.targetElementId = e.targetElementId;
+      if (e.targetLocator !== undefined) row.targetLocator = e.targetLocator;
+      if (e.boundingBox) {
+        const bb: BoundingBox = {
+          xPct: e.boundingBox.xPct,
+          yPct: e.boundingBox.yPct,
+          widthPct: e.boundingBox.widthPct,
+          heightPct: e.boundingBox.heightPct,
+        };
+        row.boundingBox = bb;
+      }
+      return row;
+    }
+
+    function toProtoResourceEntry(e: ResourceRow): ResourceTimingEntry {
+      const row: ResourceTimingEntry = {
+        url: e.url,
+        initiatorType: e.initiatorType,
+        duration: e.duration,
+        timestamp: e.timestamp,
+      };
+      if (e.dnsLookupMs !== undefined) row.dnsLookupMs = e.dnsLookupMs;
+      if (e.tcpConnectionMs !== undefined) row.tcpConnectionMs = e.tcpConnectionMs;
+      if (e.tlsNegotiationMs !== undefined) row.tlsNegotiationMs = e.tlsNegotiationMs;
+      if (e.requestTimeMs !== undefined) row.requestTimeMs = e.requestTimeMs;
+      if (e.responseTimeMs !== undefined) row.responseTimeMs = e.responseTimeMs;
+      if (e.transferSizeBytes !== undefined) row.transferSizeBytes = e.transferSizeBytes;
+      if (e.encodedSizeBytes !== undefined) row.encodedSizeBytes = e.encodedSizeBytes;
+      if (e.decodedSizeBytes !== undefined) row.decodedSizeBytes = e.decodedSizeBytes;
+      if (e.fromCache !== undefined) row.fromCache = e.fromCache;
+      if (e.resourceType !== undefined) row.resourceType = e.resourceType;
+      return row;
+    }
+
+    function fallbackFromPerformanceTimeline(): MetricsPayload {
       const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
       const paint = performance.getEntriesByType('paint') as PerformancePaintTiming[];
       const fcp = paint.find((p) => p.name === 'first-contentful-paint')?.startTime ?? 0;
@@ -473,7 +487,7 @@ export async function collectMetricsSince(
         lcp: lcpMs,
         fcp,
         cls,
-        collectedAt: String(Date.now()),
+        collectedAt: Date.now(),
         longTasksCount: 0,
         longTasksTotalMs: 0,
         memoryHeapUsedMb: mem?.usedJSHeapSize ? mem.usedJSHeapSize / (1024 * 1024) : undefined,
@@ -502,7 +516,7 @@ export async function collectMetricsSince(
     const longTasksTotalMs = longTasks.reduce((sum, task) => sum + task.value, 0);
     const tbt = longTasks.reduce((sum, task) => sum + Math.max(0, task.value - 50), 0);
 
-    const longTaskDetails = longTasks.map((task) => ({
+    const longTaskDetails: LongTaskDetail[] = longTasks.map((task) => ({
       name: task.name || 'unknown',
       startTime: task.startTime || 0,
       duration: task.value,
@@ -522,30 +536,19 @@ export async function collectMetricsSince(
       memoryHeapTotalMb = perfMem.totalJSHeapSize / (1024 * 1024);
     }
 
-    let interactionLatencies: Array<Record<string, unknown>> | undefined;
+    let interactionLatencies: InteractionLatencyEntry[] | undefined;
     if (w.__interactionMetrics && w.__interactionMetrics.length > 0) {
-      const filtered = w.__interactionMetrics.filter(
-        (entry) => (entry.timestamp as number) >= since
-      ) as Array<Record<string, unknown>>;
-      if (filtered.length > 0) interactionLatencies = filtered;
+      const filtered = w.__interactionMetrics.filter((entry) => entry.timestamp >= since);
+      if (filtered.length > 0) interactionLatencies = filtered.map(toProtoInteractionEntry);
     }
 
-    let resourceTimings: Array<Record<string, unknown>> | undefined;
+    let resourceTimings: ResourceTimingEntry[] | undefined;
     if (w.__resourceTimings && w.__resourceTimings.length > 0) {
-      const filtered = w.__resourceTimings.filter(
-        (entry) => (entry.timestamp as number) >= since
-      ) as Array<Record<string, unknown>>;
-      if (filtered.length > 0) resourceTimings = filtered;
+      const filtered = w.__resourceTimings.filter((entry) => entry.timestamp >= since);
+      if (filtered.length > 0) resourceTimings = filtered.map(toProtoResourceEntry);
     }
 
-    let layoutShiftEntries: Array<Record<string, unknown>> | undefined;
-    if (w.__layoutShiftEntries && w.__layoutShiftEntries.length > 0) {
-      const filtered = w.__layoutShiftEntries.filter((entry) => (entry.timestamp as number) >= since);
-      w.__layoutShiftEntries = w.__layoutShiftEntries.filter((entry) => (entry.timestamp as number) < since);
-      if (filtered.length > 0) layoutShiftEntries = filtered;
-    }
-
-    const base: Record<string, unknown> = {
+    const base: MetricsPayload = {
       lcp,
       fcp,
       cls,
@@ -556,15 +559,14 @@ export async function collectMetricsSince(
       memoryHeapUsedMb,
       memoryHeapTotalMb,
       collectedAt: Date.now(),
+      ...(interactionLatencies ? { interactionLatencies } : {}),
+      ...(resourceTimings ? { resourceTimings } : {}),
     };
-    if (interactionLatencies) base.interactionLatencies = interactionLatencies;
-    if (resourceTimings) base.resourceTimings = resourceTimings;
-    if (layoutShiftEntries) base.layoutShiftEntries = layoutShiftEntries;
 
     const hasAny =
       lcp !== undefined ||
       fcp !== undefined ||
-      cls !== undefined ||
+      (typeof cls === 'number' && cls > 0) ||
       tbt > 0 ||
       longTasksCount > 0 ||
       (interactionLatencies && interactionLatencies.length > 0) ||
@@ -583,7 +585,6 @@ export async function resetExploreChimpPerfMetricsBuffers(page: Page): Promise<v
       __perfMetrics?: { entries: unknown[]; cls: number; startTime: number };
       __interactionMetrics?: unknown[];
       __resourceTimings?: unknown[];
-      __layoutShiftEntries?: unknown[];
     };
     if (w.__perfMetrics) {
       w.__perfMetrics.entries = [];
@@ -592,6 +593,5 @@ export async function resetExploreChimpPerfMetricsBuffers(page: Page): Promise<v
     }
     if (w.__interactionMetrics) w.__interactionMetrics = [];
     if (w.__resourceTimings) w.__resourceTimings = [];
-    if (w.__layoutShiftEntries) w.__layoutShiftEntries = [];
   });
 }

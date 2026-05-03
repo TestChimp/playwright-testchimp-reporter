@@ -395,6 +395,17 @@ export function stableExploreChimpAnalyticsStepId(testId: string, retry: number,
 }
 
 /**
+ * Stable journey execution id for local ExploreChimp (no platform manifest).
+ * Matches {@link applyExploreChimpPageFixture}: manifest jobId wins when present.
+ */
+export function stableJourneyExecutionId(journeyId: string, batchInvocationId: string, retry: number): string {
+  const jid = String(journeyId ?? '').trim();
+  const bid = String(batchInvocationId ?? '').trim();
+  const r = Number.isFinite(retry) ? retry : 0;
+  return createHash('sha256').update(`${jid}:${bid}:${r}`).digest('hex');
+}
+
+/**
  * Generate a simple unique ID for steps
  */
 export function generateStepId(stepNumber: number): string {

@@ -30,7 +30,9 @@ import {
   normalizeManifestFolderPath,
   resolveManifestEntryFromRuntime,
   stableExploreChimpAnalyticsStepId,
+  stableJourneyExecutionId,
 } from './utils';
+import { isExploreChimpEnabled } from './explorechimp/index';
 import path from 'path';
 
 /**
@@ -508,6 +510,11 @@ export class TestChimpReporter implements Reporter {
             `[TestChimp] platform/test_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" normalizedFolderPath="${normalizeManifestFolderPath(paths.folderPath)}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}" candidates=${this.getManifestDebugCandidates(paths.fileName, paths.testName)}`
           );
         }
+        try {
+          await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution, paths);
+        } catch (e) {
+          console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
+        }
         // Cleanup all attempts for this test (we have attempts 0..result.retry)
         for (let r = 0; r <= result.retry; r++) {
           this.testExecutions.delete(this.getTestKey(test, r));
@@ -516,9 +523,14 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    // CI mode: skip non-final attempts if configured
+    // CI mode: skip non-final attempts if configured (still close ExploreChimp journey for this attempt)
     if (this.options.reportOnlyFinalAttempt && !isFinalAttempt) {
       console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
+      try {
+        await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution);
+      } catch (e) {
+        console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
+      }
       this.testExecutions.delete(testKey);
       return;
     }
@@ -557,6 +569,12 @@ export class TestChimpReporter implements Reporter {
       console.error(`[TestChimp] Failed to report test: ${test.title}`, error);
     }
 
+    try {
+      await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution);
+    } catch (e) {
+      console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
+    }
+
     // Cleanup
     this.testExecutions.delete(testKey);
   }
@@ -565,6 +583,16 @@ export class TestChimpReporter implements Reporter {
     if (this.pendingOperations.length > 0) {
       console.log(`[TestChimp] Waiting for ${this.pendingOperations.length} pending operations to complete...`);
       await Promise.allSettled(this.pendingOperations);
+    }
+    if (this.isEnabled && this.apiClient && isExploreChimpEnabled()) {
+      const explorationId = this.batchInvocationId?.trim();
+      if (explorationId) {
+        try {
+          await this.apiClient.explorechimpExplorationEnd({ explorationId });
+        } catch (e) {
+          console.error('[TestChimp] explorechimp/exploration_end failed:', e);
+        }
+      }
     }
     if (this.options.verbose) {
       console.log(`[TestChimp] Test run completed. Status: ${result.status}`);
@@ -578,6 +606,43 @@ export class TestChimpReporter implements Reporter {
 
   private getTestKey(test: TestCase, retry: number): string {
     return `${test.id}_attempt_${retry}`;
+  }
+
+  /**
+   * Local ExploreChimp: persist step timeline and mark journey_execution completed.
+   * Uses manifest jobId when in platform mode and resolved; otherwise stable hash of journeyId + batch + retry.
+   */
+  private async maybeExploreChimpJourneyExecutionEnd(
+    test: TestCase,
+    result: TestResult,
+    execution: TestExecutionState,
+    pathsInput?: ReturnType<typeof derivePaths>
+  ): Promise<void> {
+    if (!this.apiClient || !isExploreChimpEnabled()) {
+      return;
+    }
+    const explorationId = this.batchInvocationId?.trim();
+    if (!explorationId) {
+      console.warn(
+        '[TestChimp] ExploreChimp: skipping journey_execution_end — batch invocation id is empty (set TESTCHIMP_BATCH_INVOCATION_ID)'
+      );
+      return;
+    }
+    const paths = pathsInput ?? derivePaths(test, this.testsFolder, this.config.rootDir, false);
+    const manifestResolved =
+      this.options.executionMode === 'platform'
+        ? this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName)
+        : undefined;
+    const journeyExecutionId =
+      manifestResolved?.jobId?.trim() || stableJourneyExecutionId(test.id, explorationId, result.retry);
+    await this.apiClient.explorechimpJourneyExecutionEnd({
+      journeyId: test.id,
+      journeyExecutionId,
+      explorationId,
+      steps: execution.steps,
+      smartTestStatus: this.mapStatus(result.status),
+      errorMessage: result.error?.message,
+    });
   }
 
   private scanTestRetries(suite: Suite): void {

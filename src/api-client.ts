@@ -222,6 +222,47 @@ export class TestChimpApiClient {
    * Platform mode: send final job detail on test end (upsert + scenario coverage).
    * POST {backend}/api/platform/test_end with jobId and jobDetail.
    */
+  /**
+   * Local ExploreChimp: persist journey log and mark journey_execution completed.
+   * POST /smart-test/explorechimp/journey_execution_end
+   */
+  async explorechimpJourneyExecutionEnd(body: {
+    journeyId: string;
+    journeyExecutionId: string;
+    explorationId: string;
+    steps: SmartTestExecutionJobDetail['steps'];
+    smartTestStatus: number;
+    errorMessage?: string;
+  }): Promise<void> {
+    try {
+      await this.client.post('/smart-test/explorechimp/journey_execution_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] explorechimp/journey_execution_end error (${status}): ${message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Local ExploreChimp: mark exploration completed and refresh aggregated result.
+   * POST /smart-test/explorechimp/exploration_end
+   */
+  async explorechimpExplorationEnd(body: { explorationId: string }): Promise<void> {
+    try {
+      await this.client.post('/smart-test/explorechimp/exploration_end', body);
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] explorechimp/exploration_end error (${status}): ${message}`);
+      }
+      throw error;
+    }
+  }
+
   async platformTestEnd(jobId: string, jobDetail: SmartTestExecutionJobDetail): Promise<void> {
     try {
       const body = { jobId, jobDetail };

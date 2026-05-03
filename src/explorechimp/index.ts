@@ -17,13 +17,13 @@ import { createRequire } from 'module';
 import path from 'path';
 import {
   getBranchName,
-  generateUUID,
   readTestChimpBatchInvocationId,
   derivePathsFromTestInfo,
   deriveTestsFolder,
   resolveManifestEntryFromRuntime,
   loadJobManifestEntries,
   stableExploreChimpAnalyticsStepId,
+  stableJourneyExecutionId,
 } from '../utils';
 import {
   collectMetricsSince,
@@ -327,11 +327,6 @@ export function attachExploreChimpInstrumentation(
   });
 }
 
-function computeJourneyId(testInfo: { file: string; titlePath?: string[] }): string {
-  const tp = Array.isArray(testInfo.titlePath) ? testInfo.titlePath.join('::') : '';
-  return createHash('sha256').update(`${testInfo.file}::${tp}`).digest('hex');
-}
-
 /**
  * Extends Playwright `test` with ExploreChimp page meta + buffers (only when `EXPLORECHIMP_ENABLED`).
  * Used from {@link installTrueCoverage} / {@link installTestChimp}; not required as a separate install.
@@ -365,15 +360,28 @@ export function applyExploreChimpPageFixture(test: any): any {
         suitePath: dp.suitePath,
         testName: dp.testName,
       });
-      const journeyExecutionId = resolved?.entry.jobId?.trim() || generateUUID();
-      if (!resolved?.entry.jobId && process.env.TESTCHIMP_EXECUTION_MODE === 'platform') {
+      const manifestJobId = resolved?.entry.jobId?.trim();
+      const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir)?.trim() || '';
+      const journeyId = String(testInfo.testId ?? '');
+      const retry = typeof testInfo.retry === 'number' ? testInfo.retry : 0;
+      const journeyExecutionId =
+        manifestJobId ||
+        (batchInvocationId && journeyId
+          ? stableJourneyExecutionId(journeyId, batchInvocationId, retry)
+          : '');
+      if (!manifestJobId && process.env.TESTCHIMP_EXECUTION_MODE === 'platform') {
         console.warn(
-          '[ExploreChimp] No manifest jobId for this test — journeyExecutionId is random; journey viewer merge will not align with smart_test_execution_jobs.'
+          '[ExploreChimp] No manifest jobId for this test — set TESTCHIMP_BATCH_INVOCATION_ID or add a manifest entry so journeyExecutionId is stable.'
+        );
+      }
+      if (!journeyExecutionId) {
+        console.warn(
+          '[ExploreChimp] Missing journeyExecutionId (need manifest jobId or TESTCHIMP_BATCH_INVOCATION_ID + Playwright test id). ExploreChimp backend calls will be skipped.'
         );
       }
       const meta: ExploreChimpPageMeta = {
         journeyExecutionId,
-        journeyId: computeJourneyId({ file: testInfo.file, titlePath: testInfo.titlePath }),
+        journeyId,
         testId: String(testInfo.testId ?? ''),
         testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
         projectRootDir,

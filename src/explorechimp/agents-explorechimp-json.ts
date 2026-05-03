@@ -5,7 +5,8 @@
  * Keep in sync with:
  * - `AwareRepo/services/protos/agents.proto` — `AnalyzeDataSourcesRequest`, `MetricsPayload`,
  *   `RequestResponsePair`, `ApiRequestsPayload`, `DomSnapshotPayload`, `ConsoleLogsPayload`,
- *   `ScreenState`, `DataSource`, `LongTaskDetail`, `InteractionLatencyEntry`, `ResourceTimingEntry`, `BoundingBox`
+ *   `ScreenState`, `DataSource`, `LongTaskDetail`, `InteractionLatencyEntry`, `ResourceTimingEntry`, `BoundingBox`,
+ *   `Bug`, `ArtifactReference`, `AxeViolationReference`, `DomElementReference`, and step-artifact JSON shapes
  * - `AwareRepo/services/protos/common.proto` — `ConsoleLogEntry`
  *
  * Same convention as UI artifact viewers: optional proto fields use `?`; JSON uses camelCase (never snake_case in TS).
@@ -144,6 +145,130 @@ export interface MetricsPayload {
   resourceTimings?: ResourceTimingEntry[];
 }
 
+// --- `agents.proto` Bug / ArtifactReference (JSON camelCase; used by responses & GCS artifact metadata) ---
+
+/** `agents.proto` ApiRequestItemReference */
+export interface ApiRequestItemReference {
+  requestId?: number;
+  requestHeaderKey?: string;
+  responseHeaderKey?: string;
+  highlightStatusCode?: boolean;
+  requestBodyFieldPath?: string;
+  responseBodyFieldPath?: string;
+  highlightResponseTime?: boolean;
+}
+
+/** `agents.proto` ApiRequestReference */
+export interface ApiRequestReference {
+  items?: ApiRequestItemReference[];
+}
+
+/** `agents.proto` ConsoleLogReference */
+export interface ConsoleLogReference {
+  logIds?: number[];
+}
+
+/** `agents.proto` DomElementReference */
+export interface DomElementReference {
+  syntheticIds?: string[];
+}
+
+/** `agents.proto` AxeViolationReference — pairs with axe step artifact `violations[].id` / Bug.rule */
+export interface AxeViolationReference {
+  ruleId?: string;
+}
+
+/** `agents.proto` InteractionLatencyBreakdown (nested under MetricsReference) */
+export interface ArtifactInteractionLatencyBreakdown {
+  inputDelay?: number;
+  processingDuration?: number;
+  presentationDelay?: number;
+}
+
+/** `agents.proto` TrimmedHtmlElement (JSON) — subset used under LayoutShiftElement */
+export interface TrimmedHtmlElement {
+  tag?: string;
+  role?: string;
+  text?: string;
+  id?: string;
+  className?: string;
+  syntheticId?: string;
+  ariaLabel?: string;
+}
+
+/** `agents.proto` LayoutShiftElement */
+export interface LayoutShiftElement {
+  element?: TrimmedHtmlElement;
+  shiftScore?: number;
+  boundingBox?: BoundingBox;
+}
+
+/** `agents.proto` MetricsReference when nested under ArtifactReference (not the same as {@link MetricsPayload}). */
+export interface MetricsReference {
+  metricName?: string;
+  observedValue?: number;
+  thresholdValue?: number;
+  elementBoundingBoxes?: BoundingBox[];
+  latencyBreakdown?: ArtifactInteractionLatencyBreakdown;
+  screenshotUrl?: string;
+  layoutShiftElements?: LayoutShiftElement[];
+}
+
+/** `agents.proto` ScreenshotReference */
+export interface ScreenshotReference {
+  xPct?: number;
+  yPct?: number;
+  widthPct?: number;
+  heightPct?: number;
+  boundingBoxes?: BoundingBox[];
+  llmOutputBoundingBoxes?: unknown[];
+}
+
+/**
+ * `agents.proto` ArtifactReference.
+ * Typically one primary locator is set; DOM/accessibility bugs may set both `domElementReference` and `axeViolationReference`.
+ */
+export interface ArtifactReference {
+  apiRequestReference?: ApiRequestReference;
+  consoleLogReference?: ConsoleLogReference;
+  domElementReference?: DomElementReference;
+  screenshotReference?: ScreenshotReference;
+  metricsReference?: MetricsReference;
+  axeViolationReference?: AxeViolationReference;
+}
+
+/** `agents.proto` Bug — subset relevant to ExploreChimp / artifact consumers (extend as needed). */
+export interface Bug {
+  title?: string;
+  description?: string;
+  category?: string;
+  severity?: number;
+  location?: string;
+  screen?: string;
+  screenState?: string;
+  rule?: string;
+  bugHash?: string;
+  stepArtifactUrl?: string;
+  stepArtifactType?: DataSource;
+  artifactReference?: ArtifactReference;
+}
+
+/**
+ * JSON object shape for step data-source artifacts in GCS (camelCase), e.g. `__dom.json` / `__network.json`.
+ * Mirrors scriptservice `uploadDataSourceArtifact` payloads / UI `StepDataSourcePayload`.
+ */
+export interface ExploreChimpStepArtifactPayload {
+  apiRequestsPayload?: ApiRequestsPayload;
+  consoleLogsPayload?: ConsoleLogsPayload;
+  domSnapshotPayload?: DomSnapshotPayload;
+  metricsPayload?: MetricsPayload;
+  /** Full or compacted axe `analyze()` JSON string */
+  axeResultsJson?: string;
+  screenshotPayload?: {
+    screenshotBase64?: string;
+  };
+}
+
 /** `agents.proto` AnalyzeDataSourcesRequest (JSON field names). */
 export interface AnalyzeDataSourcesRequest {
   apiRequestsPayload?: ApiRequestsPayload;
@@ -162,5 +287,6 @@ export interface AnalyzeDataSourcesRequest {
   analyzedDataSource?: DataSource;
   networkRequestHash?: string;
   testId?: string;
+  /** Full or compacted axe `analyze()` JSON; often sent with DOM_SOURCE together with or without `domSnapshotPayload`. */
   axeResultsJson?: string;
 }

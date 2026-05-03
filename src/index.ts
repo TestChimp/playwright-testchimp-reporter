@@ -33,6 +33,9 @@ export { TestChimpReporter } from './testchimp-reporter';
 export { TestChimpApiClient } from './api-client';
 export * from './types';
 export * from './utils';
+/** ExploreChimp / agents.proto JSON mirrors (camelCase). */
+export type * from './explorechimp/agents-explorechimp-json';
+export { DataSourceEnum } from './explorechimp/agents-explorechimp-json';
 
 // Default export for Playwright reporter configuration
 import { TestChimpReporter } from './testchimp-reporter';

@@ -34,12 +34,25 @@ import {
 import {
   DataSourceEnum,
   type AnalyzeDataSourcesRequest,
+  type ApiRequestItemReference,
+  type ApiRequestReference,
   type ApiRequestsPayload,
+  type ArtifactInteractionLatencyBreakdown,
+  type ArtifactReference,
+  type AxeViolationReference,
+  type Bug,
   type ConsoleLogEntry,
+  type ConsoleLogReference,
   type ConsoleLogsPayload,
+  type DomElementReference,
   type DomSnapshotPayload,
+  type ExploreChimpStepArtifactPayload,
+  type LayoutShiftElement,
   type MetricsPayload,
+  type MetricsReference,
   type RequestResponsePair,
+  type ScreenshotReference,
+  type TrimmedHtmlElement,
 } from './agents-explorechimp-json';
 import { cleanHtml } from './clean-html';
 import { compactAxeResultsForUpload } from './axe-compact';
@@ -47,18 +60,31 @@ import { compactAxeResultsForUpload } from './axe-compact';
 export { DataSourceEnum };
 export type {
   AnalyzeDataSourcesRequest,
+  ApiRequestItemReference,
+  ApiRequestReference,
   ApiRequestsPayload,
+  ArtifactInteractionLatencyBreakdown,
+  ArtifactReference,
+  AxeViolationReference,
+  Bug,
   BoundingBox,
   ConsoleLogEntry,
+  ConsoleLogReference,
   ConsoleLogsPayload,
   DataSource,
+  DomElementReference,
   DomSnapshotPayload,
+  ExploreChimpStepArtifactPayload,
   InteractionLatencyEntry,
+  LayoutShiftElement,
   LongTaskDetail,
   MetricsPayload,
+  MetricsReference,
   RequestResponsePair,
   ResourceTimingEntry,
   ScreenState,
+  ScreenshotReference,
+  TrimmedHtmlElement,
 } from './agents-explorechimp-json';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
@@ -524,7 +550,7 @@ export async function runExploreChimpMarkScreenState(
   if (sources.has('SCREENSHOT')) {
     const shotTitle = `Analyzing Screenshot for Screen-state ${current.name} | ${current.state}`;
     await test.step(shotTitle, async () => {
-      const jpeg = await page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
+      const jpeg = await page.screenshot({ type: 'jpeg', quality: 60, fullPage: false });
       const gcpPath = await uploadScreenshot(client, jpeg);
       await postAnalyze(client, {
         explorationId,

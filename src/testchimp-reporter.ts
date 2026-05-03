@@ -71,6 +71,11 @@ interface RetryInfo {
  * });
  */
 export class TestChimpReporter implements Reporter {
+  /**
+   * Max Playwright trace .zip size we'll POST as multipart to featureservice `/api/upload_attachment`.
+   * Must stay below the server's Commons multipart limit (see featureservice `FeatureServiceApplication`).
+   * Failure screenshots use the same endpoint but are re-encoded to JPEG first (~viewport KB range).
+   */
   private static readonly DEFAULT_TRACE_MAX_BYTES = 25 * 1024 * 1024;
   private static readonly DEFAULT_TRACE_UPLOAD_TIMEOUT_MS = 120_000;
   private static readonly DEFAULT_TRACE_UPLOAD_RETRIES = 2;

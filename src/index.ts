@@ -19,12 +19,14 @@
  * });
  *
  * Environment Variables:
- * - TESTCHIMP_API_KEY (required): API key for authentication
- * - TESTCHIMP_PROJECT_ID (optional): Project identifier; omit when using API-key–only auth
- * - TESTCHIMP_API_URL (optional): API URL (default: https://api.testchimp.io)
+ * - TESTCHIMP_API_KEY (required for backend calls): resolves project + organization server-side
+ * - TESTCHIMP_PROJECT_ID (optional): only when not inferable from API key (legacy paths)
+ * - TESTCHIMP_BACKEND_URL (optional): Featureservice base URL (defaults used by reporter)
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
+ * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
+ * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module.
  */
 
 export { TestChimpReporter } from './testchimp-reporter';

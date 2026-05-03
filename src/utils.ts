@@ -1,4 +1,6 @@
+import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import type { TestCase, Suite } from '@playwright/test/reporter';
 import type { JobManifestEntry } from './types';
 
@@ -342,6 +344,54 @@ export function getBranchName(): string | undefined {
   const ghRef = process.env.GITHUB_REF;
   if (ghRef?.startsWith('refs/heads/')) return ghRef.slice('refs/heads/'.length);
   return undefined;
+}
+
+const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
+
+/**
+ * Batch / exploration id used by TrueCoverage and ExploreChimp local runs.
+ * Prefer env TESTCHIMP_BATCH_INVOCATION_ID, else `.testchimp-batch-invocation-id` under project root.
+ */
+export function readTestChimpBatchInvocationId(projectRootDir: string = process.cwd()): string | undefined {
+  const fromEnv = process.env.TESTCHIMP_BATCH_INVOCATION_ID;
+  if (fromEnv) return fromEnv.trim();
+  const filePath =
+    process.env.TESTCHIMP_BATCH_ID_FILE || path.join(projectRootDir, BATCH_ID_FILENAME);
+  try {
+    const v = fs.readFileSync(filePath, 'utf8').trim();
+    return v || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Same path rules as {@link TestChimpReporter} platform manifest (jobId ↔ test identity).
+ */
+export function loadJobManifestEntries(projectRootDir: string = process.cwd()): JobManifestEntry[] {
+  const testsFolder = process.env.TESTCHIMP_TESTS_FOLDER || 'tests';
+  const manifestPath =
+    process.env.TESTCHIMP_JOB_MANIFEST_PATH?.trim() ||
+    path.join(testsFolder, '.testchimp-job-manifest.json');
+  const resolvedPath = path.isAbsolute(manifestPath) ? manifestPath : path.join(projectRootDir, manifestPath);
+  try {
+    const content = fs.readFileSync(resolvedPath, 'utf8');
+    const parsed = JSON.parse(content) as JobManifestEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Stable step id for ExploreChimp analytics Playwright steps so {@link TestChimpReporter} `SmartTestExecutionStep.step_id`
+ * matches `AnalyzeDataSourcesRequest.step_id` / persisted bugs (journey viewer merge).
+ */
+export function stableExploreChimpAnalyticsStepId(testId: string, retry: number, stepTitle: string): string {
+  const tid = String(testId ?? '');
+  const r = Number.isFinite(retry) ? retry : 0;
+  const title = String(stepTitle ?? '');
+  return createHash('sha256').update(`${tid}:${r}:${title}`).digest('hex');
 }
 
 /**

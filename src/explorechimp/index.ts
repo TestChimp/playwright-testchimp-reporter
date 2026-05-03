@@ -1,0 +1,568 @@
+/**
+ * ExploreChimp local runs (when `EXPLORECHIMP_ENABLED`): page instrumentation + analyze API via Featureservice.
+ * Wired automatically by `installTrueCoverage` / `installTestChimp` — do not import this module from app code.
+ * With ExploreChimp on, call markers via the Playwright fixture: `test('…', async ({ markScreenState }) => { … })`.
+ * Env: TESTCHIMP_BACKEND_URL, TESTCHIMP_API_KEY, TESTCHIMP_BATCH_INVOCATION_ID (exploration id).
+ * Optional: EXPLORECHIMP_SOURCES_TO_ANALYZE, EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE (required when NETWORK is listed),
+ * EXPLORECHIMP_LONG_TASK_THRESHOLD_MS (default 50; matches scriptservice watcher long-task gate).
+ */
+
+import axios, { AxiosInstance } from 'axios';
+import FormData from 'form-data';
+import { createHash } from 'crypto';
+import type { Page } from '@playwright/test';
+import { createRequire } from 'module';
+import path from 'path';
+import {
+  getBranchName,
+  generateUUID,
+  readTestChimpBatchInvocationId,
+  derivePathsFromTestInfo,
+  deriveTestsFolder,
+  resolveManifestEntryFromRuntime,
+  loadJobManifestEntries,
+  stableExploreChimpAnalyticsStepId,
+} from '../utils';
+import {
+  collectMetricsSince,
+  installExploreChimpPerfMetricsObservers,
+  parseExploreChimpLongTaskThresholdMs,
+  resetExploreChimpPerfMetricsBuffers,
+} from './perf-metrics';
+
+const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+
+const K_META = '__testchimpExploreChimpMeta';
+const K_BUF = '__testchimpExploreChimpBuffers';
+const K_HOOKED = '__testchimpExploreChimpHooked';
+
+type PageAugmented = Page & Record<string, unknown>;
+
+/** Matches scriptservice / protos/agents DataSource numeric values (user-facing sources only). */
+export const DataSourceEnum = {
+  UNKNOWN_DATA_SOURCE: 0,
+  DOM_SOURCE: 1,
+  SCREENSHOT_SOURCE: 2,
+  NETWORK_SOURCE: 3,
+  CONSOLE_SOURCE: 4,
+  METRICS_SOURCE: 5,
+} as const;
+
+export interface ExploreChimpPageMeta {
+  journeyExecutionId: string;
+  journeyId: string;
+  testId: string;
+  /** Playwright testInfo.retry — used with testId for stable analytics step ids. */
+  testRetry: number;
+  projectRootDir: string;
+}
+
+function exploreChimpAnalyticsStepId(meta: ExploreChimpPageMeta, stepTitle: string): string {
+  return stableExploreChimpAnalyticsStepId(meta.testId, meta.testRetry, stepTitle);
+}
+
+interface ConsoleRow {
+  type: string;
+  text: string;
+  timestamp: number;
+}
+
+interface NetworkRow {
+  url: string;
+  method: string;
+  status: number;
+  responseTimeMs: number;
+  timestamp: number;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+}
+
+interface BufferState {
+  consoleRows: ConsoleRow[];
+  networkRows: NetworkRow[];
+  priorMarkedScreen: { name: string; state: string } | null;
+  /** Wall-clock start of the interval attributed to the *prior* screen-state (scriptservice `metricsCollectionStartTimestamp`). */
+  metricsIntervalSinceMs: number;
+}
+
+const MAX_CONSOLE = 60;
+const MAX_CONSOLE_MSG = 600;
+const MAX_NETWORK_ROWS = 35;
+
+export function isExploreChimpEnabled(): boolean {
+  const v = process.env.EXPLORECHIMP_ENABLED;
+  return v === '1' || v === 'true' || v === 'TRUE';
+}
+
+export function parseExploreChimpSources(): Set<string> {
+  const raw = process.env.EXPLORECHIMP_SOURCES_TO_ANALYZE?.trim();
+  if (!raw) {
+    return new Set(['DOM', 'SCREENSHOT', 'CONSOLE', 'NETWORK', 'METRICS']);
+  }
+  return new Set(raw.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean));
+}
+
+function parseNetworkRegex(): RegExp | null {
+  const raw = process.env.EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE?.trim();
+  if (!raw) return null;
+  try {
+    return new RegExp(raw);
+  } catch {
+    console.warn(`[ExploreChimp] Invalid EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE — ignoring`);
+    return null;
+  }
+}
+
+function createBackendClient(): AxiosInstance {
+  const backendUrl =
+    process.env.TESTCHIMP_BACKEND_URL?.trim() || 'https://featureservice.testchimp.io';
+  const apiKey = process.env.TESTCHIMP_API_KEY?.trim() || '';
+  return axios.create({
+    baseURL: backendUrl.replace(/\/+$/, ''),
+    headers: {
+      'Content-Type': 'application/json',
+      'testchimp-api-key': apiKey,
+    },
+    timeout: 120000,
+  });
+}
+
+async function uploadScreenshot(client: AxiosInstance, buffer: Buffer): Promise<string> {
+  const form = new FormData();
+  form.append('file', buffer, { filename: 'explorechimp.jpg', contentType: 'image/jpeg' });
+  const response = await client.post('/api/upload_attachment', form, {
+    headers: {
+      ...form.getHeaders(),
+    },
+    timeout: 120000,
+  });
+  const gcpPath = (response.data as { gcpPath?: string })?.gcpPath;
+  if (!gcpPath) {
+    throw new Error('[ExploreChimp] upload_attachment missing gcpPath');
+  }
+  return gcpPath;
+}
+
+async function postAnalyze(client: AxiosInstance, body: Record<string, unknown>): Promise<void> {
+  await client.post('/smart-test/analyze_explorechimp_data_sources', body);
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max);
+}
+
+function headersToRecord(headers: { [name: string]: string }): Record<string, string> {
+  const out: Record<string, string> = {};
+  const allowReq = new Set([
+    'content-type',
+    'authorization',
+    'cookie',
+    'user-agent',
+    'accept',
+    'referer',
+    'origin',
+  ]);
+  const allowRes = new Set([
+    'content-type',
+    'cache-control',
+    'x-frame-options',
+    'content-security-policy',
+  ]);
+  for (const [k, v] of Object.entries(headers)) {
+    const lk = k.toLowerCase();
+    if (allowReq.has(lk) || allowRes.has(lk)) {
+      out[k] = lk === 'authorization' ? '[REDACTED]' : truncate(String(v), 500);
+    }
+  }
+  return out;
+}
+
+function consolePayload(rows: ConsoleRow[]): Record<string, { type?: string; text?: string; timestamp?: string }> {
+  const map: Record<string, { type?: string; text?: string; timestamp?: string }> = {};
+  const slice = rows.slice(-MAX_CONSOLE);
+  slice.forEach((r, i) => {
+    map[String(i)] = {
+      type: r.type,
+      text: truncate(r.text, MAX_CONSOLE_MSG),
+      timestamp: String(r.timestamp),
+    };
+  });
+  return map;
+}
+
+function networkPayload(rows: NetworkRow[]): {
+  requests: Record<
+    string,
+    {
+      url?: string;
+      method?: string;
+      status?: number;
+      responseTimeMs?: number;
+      timestamp?: string;
+      requestHeaders?: Record<string, string>;
+      responseHeaders?: Record<string, string>;
+    }
+  >;
+} {
+  const requests: Record<
+    string,
+    {
+      url?: string;
+      method?: string;
+      status?: number;
+      responseTimeMs?: number;
+      timestamp?: string;
+      requestHeaders?: Record<string, string>;
+      responseHeaders?: Record<string, string>;
+    }
+  > = {};
+  rows.slice(-MAX_NETWORK_ROWS).forEach((r, i) => {
+    requests[String(i)] = {
+      url: truncate(r.url, 2000),
+      method: r.method,
+      status: r.status,
+      responseTimeMs: r.responseTimeMs,
+      timestamp: String(r.timestamp),
+      requestHeaders: r.requestHeaders,
+      responseHeaders: r.responseHeaders,
+    };
+  });
+  return { requests };
+}
+
+function hashNetworkBatch(rows: NetworkRow[]): string {
+  const key = rows
+    .map((r) => `${r.method} ${r.url}`)
+    .sort()
+    .join('\n');
+  return createHash('sha256').update(key).digest('hex');
+}
+
+function getBuffers(page: Page): BufferState {
+  const p = page as PageAugmented;
+  if (!p[K_BUF]) {
+    p[K_BUF] = {
+      consoleRows: [],
+      networkRows: [],
+      priorMarkedScreen: null,
+      metricsIntervalSinceMs: Date.now(),
+    };
+  }
+  return p[K_BUF] as BufferState;
+}
+
+/** Clears console/network buffers, resets in-page perf buffers (watcher.resetMetrics), advances metrics interval. */
+async function resetExploreChimpIntervalBuffers(page: Page): Promise<void> {
+  const b = getBuffers(page);
+  b.consoleRows = [];
+  b.networkRows = [];
+  await resetExploreChimpPerfMetricsBuffers(page);
+  b.metricsIntervalSinceMs = Date.now();
+}
+
+export function attachExploreChimpInstrumentation(
+  page: Page,
+  opts: { recordNetwork: boolean; networkRegex: RegExp | null }
+): void {
+  const p = page as PageAugmented;
+  if (p[K_HOOKED]) return;
+  p[K_HOOKED] = true;
+
+  const reqStarts = new WeakMap<import('@playwright/test').Request, number>();
+
+  if (opts.recordNetwork && opts.networkRegex) {
+    const networkRegex = opts.networkRegex;
+    page.on('request', (req) => {
+      reqStarts.set(req, Date.now());
+    });
+
+    page.on('response', async (response) => {
+      try {
+        const req = response.request();
+        const url = req.url();
+        if (!networkRegex.test(url)) return;
+        const start = reqStarts.get(req) ?? Date.now();
+        const rt = Math.max(0, Date.now() - start);
+        const reqHeaders = headersToRecord(req.headers());
+        let resHeaders: Record<string, string> = {};
+        try {
+          resHeaders = headersToRecord(response.headers());
+        } catch {
+          /* ignore */
+        }
+        const b = getBuffers(page);
+        if (b.networkRows.length >= MAX_NETWORK_ROWS * 2) {
+          b.networkRows.splice(0, b.networkRows.length - MAX_NETWORK_ROWS);
+        }
+        b.networkRows.push({
+          url,
+          method: req.method(),
+          status: response.status(),
+          responseTimeMs: rt,
+          timestamp: Date.now(),
+          requestHeaders: reqHeaders,
+          responseHeaders: resHeaders,
+        });
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+
+  page.on('console', (msg) => {
+    const b = getBuffers(page);
+    b.consoleRows.push({
+      type: msg.type(),
+      text: truncate(msg.text(), MAX_CONSOLE_MSG),
+      timestamp: Date.now(),
+    });
+    if (b.consoleRows.length > MAX_CONSOLE * 2) {
+      b.consoleRows.splice(0, b.consoleRows.length - MAX_CONSOLE);
+    }
+  });
+}
+
+function computeJourneyId(testInfo: { file: string; titlePath?: string[] }): string {
+  const tp = Array.isArray(testInfo.titlePath) ? testInfo.titlePath.join('::') : '';
+  return createHash('sha256').update(`${testInfo.file}::${tp}`).digest('hex');
+}
+
+/**
+ * Extends Playwright `test` with ExploreChimp page meta + buffers (only when `EXPLORECHIMP_ENABLED`).
+ * Used from {@link installTrueCoverage} / {@link installTestChimp}; not required as a separate install.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyExploreChimpPageFixture(test: any): any {
+  return test.extend({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    page: async ({ page }: { page: Page }, use: any, testInfo: any) => {
+      if (!isExploreChimpEnabled()) {
+        await use(page);
+        return;
+      }
+      const project = testInfo.project as { rootDir?: string };
+      const projectRootDir = project.rootDir ?? process.cwd();
+      const testsFolder = deriveTestsFolder(projectRootDir);
+      const manifest = loadJobManifestEntries(projectRootDir);
+      const dp = derivePathsFromTestInfo(
+        {
+          file: testInfo.file,
+          title: testInfo.title,
+          titlePath: testInfo.titlePath,
+          project: testInfo.project,
+        },
+        testsFolder,
+        projectRootDir
+      );
+      const resolved = resolveManifestEntryFromRuntime(manifest, {
+        folderPath: dp.folderPath,
+        fileName: dp.fileName,
+        suitePath: dp.suitePath,
+        testName: dp.testName,
+      });
+      const journeyExecutionId = resolved?.entry.jobId?.trim() || generateUUID();
+      if (!resolved?.entry.jobId && process.env.TESTCHIMP_EXECUTION_MODE === 'platform') {
+        console.warn(
+          '[ExploreChimp] No manifest jobId for this test — journeyExecutionId is random; journey viewer merge will not align with smart_test_execution_jobs.'
+        );
+      }
+      const meta: ExploreChimpPageMeta = {
+        journeyExecutionId,
+        journeyId: computeJourneyId({ file: testInfo.file, titlePath: testInfo.titlePath }),
+        testId: String(testInfo.testId ?? ''),
+        testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
+        projectRootDir,
+      };
+      (page as PageAugmented)[K_META] = meta;
+
+      const sources = parseExploreChimpSources();
+      const wantNetwork = sources.has('NETWORK');
+      const regex = wantNetwork ? parseNetworkRegex() : null;
+      if (wantNetwork && !regex) {
+        console.warn(
+          '[ExploreChimp] NETWORK listed in EXPLORECHIMP_SOURCES_TO_ANALYZE but EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE is missing — network capture disabled'
+        );
+      }
+      attachExploreChimpInstrumentation(page, {
+        recordNetwork: !!(wantNetwork && regex),
+        networkRegex: regex,
+      });
+      if (sources.has('METRICS')) {
+        await installExploreChimpPerfMetricsObservers(page, parseExploreChimpLongTaskThresholdMs());
+      }
+
+      await use(page);
+    },
+  });
+}
+
+function getMeta(page: Page): ExploreChimpPageMeta | undefined {
+  return (page as PageAugmented)[K_META] as ExploreChimpPageMeta | undefined;
+}
+
+/**
+ * ExploreChimp path for screen markers; invoked by the `markScreenState` fixture (not directly from specs).
+ */
+export async function runExploreChimpMarkScreenState(
+  page: Page,
+  screenName: string,
+  stateName?: string
+): Promise<void> {
+  const screen = String(screenName ?? '').trim();
+  if (!screen) return;
+
+  const state =
+    stateName != null && String(stateName).trim() !== ''
+      ? String(stateName).trim()
+      : 'default';
+
+  const { test } = pwRequire('@playwright/test') as { test: { step: (name: string, fn: () => Promise<void>) => Promise<void> } };
+
+  const sources = parseExploreChimpSources();
+  const meta = getMeta(page);
+  const explorationId = readTestChimpBatchInvocationId(meta?.projectRootDir ?? process.cwd());
+  const apiKey = process.env.TESTCHIMP_API_KEY?.trim() || '';
+
+  if (!meta || !explorationId || !apiKey) {
+    console.warn(
+      '[ExploreChimp] Missing ExploreChimp page wiring (installTrueCoverage + EXPLORECHIMP_ENABLED), TESTCHIMP_API_KEY, or TESTCHIMP_BATCH_INVOCATION_ID — skipping backend calls'
+    );
+    // eslint-disable-next-line no-console
+    console.log(`reached ${screen} | ${state}`);
+    return;
+  }
+
+  await test.step(`ScreenState: ${screen} | ${state}`, async () => {
+    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+  });
+
+  const client = createBackendClient();
+  const buffers = getBuffers(page);
+  const prior = buffers.priorMarkedScreen;
+  const current = { name: screen, state };
+  const branchName = getBranchName();
+
+  const wantNetwork = sources.has('NETWORK');
+  const regex = wantNetwork ? parseNetworkRegex() : null;
+
+  // --- Prior interval: console, network, metrics (attribute to prior screen-state)
+  if (prior) {
+    if (sources.has('CONSOLE') && buffers.consoleRows.length > 0) {
+      const consoleTitle = `Analyzing Console for Screen-state ${prior.name} | ${prior.state}`;
+      await test.step(consoleTitle, async () => {
+        await postAnalyze(client, {
+          explorationId,
+          journeyExecutionId: meta.journeyExecutionId,
+          journeyId: meta.journeyId,
+          testId: meta.testId,
+          branchName: branchName ?? '',
+          stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
+          analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
+          screenState: { name: prior.name, state: prior.state },
+          consoleLogsPayload: { consoleLogs: consolePayload(buffers.consoleRows) },
+          networkRequestHash: '',
+        });
+      });
+    }
+
+    if (wantNetwork && regex && buffers.networkRows.length > 0) {
+      const netRows = buffers.networkRows.filter((r) => regex.test(r.url));
+      if (netRows.length > 0) {
+        const networkTitle = `Analyzing Network for Screen-state ${prior.name} | ${prior.state}`;
+        const hash = hashNetworkBatch(netRows);
+        await test.step(networkTitle, async () => {
+          await postAnalyze(client, {
+            explorationId,
+            journeyExecutionId: meta.journeyExecutionId,
+            journeyId: meta.journeyId,
+            testId: meta.testId,
+            branchName: branchName ?? '',
+            stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
+            analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
+            screenState: { name: prior.name, state: prior.state },
+            apiRequestsPayload: networkPayload(netRows),
+            networkRequestHash: hash,
+          });
+        });
+      }
+    }
+
+    if (sources.has('METRICS')) {
+      const metricsTitle = `Analyzing Metrics for Screen-state ${prior.name} | ${prior.state}`;
+      let metricsPayload: Record<string, unknown> | null = null;
+      try {
+        metricsPayload = await collectMetricsSince(page, buffers.metricsIntervalSinceMs);
+      } catch {
+        metricsPayload = null;
+      }
+      if (metricsPayload) {
+        await test.step(metricsTitle, async () => {
+          await postAnalyze(client, {
+            explorationId,
+            journeyExecutionId: meta.journeyExecutionId,
+            journeyId: meta.journeyId,
+            testId: meta.testId,
+            branchName: branchName ?? '',
+            stepId: exploreChimpAnalyticsStepId(meta, metricsTitle),
+            analyzedDataSource: DataSourceEnum.METRICS_SOURCE,
+            screenState: { name: prior.name, state: prior.state },
+            metricsPayload,
+            networkRequestHash: '',
+          });
+        });
+      }
+    }
+  }
+
+  // --- Current screen: screenshot + DOM (DOM + axe = single request, single Playwright step)
+  if (sources.has('SCREENSHOT')) {
+    const shotTitle = `Analyzing Screenshot for Screen-state ${current.name} | ${current.state}`;
+    await test.step(shotTitle, async () => {
+      const jpeg = await page.screenshot({ type: 'jpeg', quality: 80, fullPage: false });
+      const gcpPath = await uploadScreenshot(client, jpeg);
+      await postAnalyze(client, {
+        explorationId,
+        journeyExecutionId: meta.journeyExecutionId,
+        journeyId: meta.journeyId,
+        testId: meta.testId,
+        branchName: branchName ?? '',
+        stepId: exploreChimpAnalyticsStepId(meta, shotTitle),
+        analyzedDataSource: DataSourceEnum.SCREENSHOT_SOURCE,
+        screenState: { name: current.name, state: current.state },
+        screenshotPath: gcpPath,
+        networkRequestHash: '',
+      });
+    });
+  }
+
+  if (sources.has('DOM')) {
+    const domTitle = `Analyzing DOM for Screen-state ${current.name} | ${current.state}`;
+    await test.step(domTitle, async () => {
+      let html = '';
+      try {
+        html = await page.content();
+      } catch {
+        html = '';
+      }
+      const { default: AxeBuilder } = await import('@axe-core/playwright');
+      const axeResults = await new AxeBuilder({ page }).analyze();
+      await postAnalyze(client, {
+        explorationId,
+        journeyExecutionId: meta.journeyExecutionId,
+        journeyId: meta.journeyId,
+        testId: meta.testId,
+        branchName: branchName ?? '',
+        stepId: exploreChimpAnalyticsStepId(meta, domTitle),
+        analyzedDataSource: DataSourceEnum.DOM_SOURCE,
+        screenState: { name: current.name, state: current.state },
+        domSnapshotPayload: { snapshot: truncate(html, 50000) },
+        axeResultsJson: JSON.stringify(axeResults),
+        networkRequestHash: '',
+      });
+    });
+  }
+
+  buffers.priorMarkedScreen = current;
+  await resetExploreChimpIntervalBuffers(page);
+}

@@ -28,7 +28,8 @@ import {
   generateUUID,
   getEnvVar,
   normalizeManifestFolderPath,
-  resolveManifestEntryFromRuntime
+  resolveManifestEntryFromRuntime,
+  stableExploreChimpAnalyticsStepId,
 } from './utils';
 import path from 'path';
 
@@ -362,11 +363,15 @@ export class TestChimpReporter implements Reporter {
     }
 
     const stepNumber = execution.steps.length + 1;
-    const stepId = generateStepId(stepNumber);
+    const desc = this.getStepDescription(step);
+    let stepId = generateStepId(stepNumber);
+    if (step.category === 'test.step' && this.isExploreChimpAnalyticsStepTitle(step.title)) {
+      stepId = stableExploreChimpAnalyticsStepId(test.id, result.retry, step.title);
+    }
 
     const executionStep: SmartTestExecutionStep = {
       stepId,
-      description: this.getStepDescription(step),
+      description: desc,
       status: step.error
         ? StepExecutionStatus.FAILURE_STEP_EXECUTION
         : StepExecutionStatus.SUCCESS_STEP_EXECUTION,
@@ -917,6 +922,17 @@ export class TestChimpReporter implements Reporter {
   }
 
   /** Single-line description: test.step / expect use title; generic pw:api uses enclosing test.step title when present. */
+  /** Must match ExploreChimp `test.step` titles in `explorechimp/index.ts` (stable step id alignment). */
+  private isExploreChimpAnalyticsStepTitle(title: string): boolean {
+    return (
+      title.startsWith('Analyzing Console for Screen-state') ||
+      title.startsWith('Analyzing Network for Screen-state') ||
+      title.startsWith('Analyzing Metrics for Screen-state') ||
+      title.startsWith('Analyzing Screenshot for Screen-state') ||
+      title.startsWith('Analyzing DOM for Screen-state')
+    );
+  }
+
   private getStepDescription(step: TestStep): string {
     if (step.category === 'test.step' || step.category === 'expect') {
       return step.title;

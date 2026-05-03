@@ -1,6 +1,6 @@
 {
   "name": "@testchimp/playwright",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Playwright reporter for TestChimp test execution tracking and coverage reporting",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -36,6 +36,7 @@
     "@playwright/test": ">=1.40.0"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.11.0",
     "axios": "^1.6.0",
     "dotenv": "^17.0.0",
     "ai-wright": "^0.0.12",

@@ -5,6 +5,8 @@
  * Env: TESTCHIMP_BACKEND_URL, TESTCHIMP_API_KEY, TESTCHIMP_BATCH_INVOCATION_ID (exploration id).
  * Optional: EXPLORECHIMP_SOURCES_TO_ANALYZE, EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE (required when NETWORK is listed),
  * EXPLORECHIMP_LONG_TASK_THRESHOLD_MS (default 50; matches scriptservice watcher long-task gate).
+ * DOM/axe payload caps: EXPLORECHIMP_DOM_MAX_CHARS (default 32000), EXPLORECHIMP_AXE_MAX_VIOLATIONS (default 25),
+ * EXPLORECHIMP_AXE_MAX_NODES_PER_VIOLATION (default 8).
  */
 
 import axios, { AxiosInstance } from 'axios';
@@ -29,6 +31,8 @@ import {
   parseExploreChimpLongTaskThresholdMs,
   resetExploreChimpPerfMetricsBuffers,
 } from './perf-metrics';
+import { cleanHtml } from './clean-html';
+import { compactAxeResultsForUpload } from './axe-compact';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -547,6 +551,11 @@ export async function runExploreChimpMarkScreenState(
       }
       const { default: AxeBuilder } = await import('@axe-core/playwright');
       const axeResults = await new AxeBuilder({ page }).analyze();
+      const domMaxParsed = Number.parseInt(process.env.EXPLORECHIMP_DOM_MAX_CHARS?.trim() || '', 10);
+      const domMax =
+        Number.isFinite(domMaxParsed) && domMaxParsed > 0 ? domMaxParsed : 32000;
+      const snapshot = cleanHtml(html, domMax);
+      const axeResultsJson = compactAxeResultsForUpload(axeResults);
       await postAnalyze(client, {
         explorationId,
         journeyExecutionId: meta.journeyExecutionId,
@@ -556,8 +565,8 @@ export async function runExploreChimpMarkScreenState(
         stepId: exploreChimpAnalyticsStepId(meta, domTitle),
         analyzedDataSource: DataSourceEnum.DOM_SOURCE,
         screenState: { name: current.name, state: current.state },
-        domSnapshotPayload: { snapshot: truncate(html, 50000) },
-        axeResultsJson: JSON.stringify(axeResults),
+        domSnapshotPayload: { snapshot },
+        axeResultsJson,
         networkRequestHash: '',
       });
     });

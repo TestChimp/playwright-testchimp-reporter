@@ -364,6 +364,15 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
+    // ExploreChimp wraps analyze calls in test.step; axe/page.content emit many nested pw:api steps. Do not
+    // record them (avoids duplicate descriptions in ingestion + smaller payloads / platform step_end traffic).
+    if (step.category === 'pw:api' && this.hasExploreChimpSyntheticWrapperAncestor(step)) {
+      if (this.options.verbose) {
+        console.log(`[TestChimp] Step suppressed (pw:api inside ExploreChimp wrapper): "${step.title}"`);
+      }
+      return;
+    }
+
     const stepNumber = execution.steps.length + 1;
     const desc = this.getStepDescription(step);
     let stepId = generateStepId(stepNumber);
@@ -509,6 +518,37 @@ export class TestChimpReporter implements Reporter {
           console.warn(
             `[TestChimp] platform/test_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" normalizedFolderPath="${normalizeManifestFolderPath(paths.folderPath)}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}" candidates=${this.getManifestDebugCandidates(paths.fileName, paths.testName)}`
           );
+          if (isExploreChimpEnabled() && isFinalAttempt) {
+            const fsBase = (getEnvVar('TESTCHIMP_BACKEND_URL', '') || '').trim();
+            if (fsBase) {
+              if (this.options.captureScreenshots) {
+                await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
+              }
+              const traceGcsPath = await this.uploadTraceAttachmentIfPresent(result.attachments);
+              const fallbackReport = this.buildReport(test, result, execution);
+              if (traceGcsPath) {
+                fallbackReport.jobDetail.traceGcsPath = traceGcsPath;
+              }
+              try {
+                const fsClient = new TestChimpApiClient(
+                  fsBase,
+                  getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey) || '',
+                  getEnvVar('TESTCHIMP_PROJECT_ID', this.options.projectId) || '',
+                  this.options.verbose
+                );
+                await fsClient.ingestExecutionReport(fallbackReport);
+                console.log(
+                  `[TestChimp] ExploreChimp platform fallback: ingested smart test execution to featureservice (${fsBase}) jobId=${fallbackReport.journeyExecutionId ?? '(none)'}`
+                );
+              } catch (e) {
+                console.error('[TestChimp] ExploreChimp platform fallback ingest failed:', e);
+              }
+            } else {
+              console.warn(
+                '[TestChimp] ExploreChimp platform mode: no manifest jobId and TESTCHIMP_BACKEND_URL is unset; smart_test_execution_jobs will not be written. Set TESTCHIMP_BACKEND_URL to your featureservice base URL for fallback CI ingest.'
+              );
+            }
+          }
         }
         try {
           await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution, paths);
@@ -609,8 +649,33 @@ export class TestChimpReporter implements Reporter {
   }
 
   /**
-   * Local ExploreChimp: persist step timeline and mark journey_execution completed.
-   * Uses manifest jobId when in platform mode and resolved; otherwise stable hash of journeyId + batch + retry.
+   * ExploreChimp execution job id: platform manifest job id when resolved, else stable hash of test id + batch + retry.
+   * Must match {@link maybeExploreChimpJourneyExecutionEnd} and the id used for smart test execution ingest.
+   */
+  private exploreChimpJourneyExecutionJobId(
+    test: TestCase,
+    result: TestResult,
+    paths: ReturnType<typeof derivePaths>
+  ): string | undefined {
+    if (!isExploreChimpEnabled()) {
+      return undefined;
+    }
+    const explorationId = this.batchInvocationId?.trim();
+    if (!explorationId) {
+      return undefined;
+    }
+    if (this.options.executionMode === 'platform') {
+      const resolved = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
+      const fromManifest = resolved?.jobId?.trim();
+      if (fromManifest) {
+        return fromManifest;
+      }
+    }
+    return stableJourneyExecutionId(test.id, explorationId, result.retry);
+  }
+
+  /**
+   * Local ExploreChimp: persist step timeline and mark the journey execution completed.
    */
   private async maybeExploreChimpJourneyExecutionEnd(
     test: TestCase,
@@ -624,17 +689,15 @@ export class TestChimpReporter implements Reporter {
     const explorationId = this.batchInvocationId?.trim();
     if (!explorationId) {
       console.warn(
-        '[TestChimp] ExploreChimp: skipping journey_execution_end — batch invocation id is empty (set TESTCHIMP_BATCH_INVOCATION_ID)'
+        '[TestChimp] ExploreChimp: skipping journey end — batch invocation id is empty (set TESTCHIMP_BATCH_INVOCATION_ID)'
       );
       return;
     }
     const paths = pathsInput ?? derivePaths(test, this.testsFolder, this.config.rootDir, false);
-    const manifestResolved =
-      this.options.executionMode === 'platform'
-        ? this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName)
-        : undefined;
-    const journeyExecutionId =
-      manifestResolved?.jobId?.trim() || stableJourneyExecutionId(test.id, explorationId, result.retry);
+    const journeyExecutionId = this.exploreChimpJourneyExecutionJobId(test, result, paths);
+    if (!journeyExecutionId) {
+      return;
+    }
     await this.apiClient.explorechimpJourneyExecutionEnd({
       journeyId: test.id,
       journeyExecutionId,
@@ -685,7 +748,7 @@ export class TestChimpReporter implements Reporter {
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);
 
-    return {
+    const report: SmartTestExecutionReport = {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
       suitePath: paths.suitePath,
@@ -706,6 +769,11 @@ export class TestChimpReporter implements Reporter {
       branchName,
       branchId: branchIdValid
     };
+    const exploreChimpJobId = this.exploreChimpJourneyExecutionJobId(test, result, paths);
+    if (exploreChimpJobId) {
+      report.journeyExecutionId = exploreChimpJobId;
+    }
+    return report;
   }
 
   private mapStatus(playwrightStatus: string): SmartTestExecutionStatus {
@@ -974,18 +1042,6 @@ export class TestChimpReporter implements Reporter {
     return TestChimpReporter.GENERIC_PW_API_TITLES.has(title.trim().toLowerCase());
   }
 
-  /** Closest ancestor test.step (user/framework intent), e.g. ai.act wrapper. */
-  private getInnermostEnclosingTestStepTitle(step: TestStep): string | undefined {
-    let p: TestStep | undefined = step.parent;
-    while (p) {
-      if (p.category === 'test.step') {
-        return p.title;
-      }
-      p = p.parent;
-    }
-    return undefined;
-  }
-
   /** Single-line description: test.step / expect use title; generic pw:api uses enclosing test.step title when present. */
   /** Must match ExploreChimp `test.step` titles in `explorechimp/index.ts` (stable step id alignment). */
   private isExploreChimpAnalyticsStepTitle(title: string): boolean {
@@ -996,6 +1052,39 @@ export class TestChimpReporter implements Reporter {
       title.startsWith('Analyzing Screenshot for Screen-state') ||
       title.startsWith('Analyzing DOM for Screen-state')
     );
+  }
+
+  /**
+   * Playwright `test.step` wrappers used by ExploreChimp / markScreenState. Nested `pw:api` calls (e.g. axe
+   * internals) must not inherit these titles for ingestion — that produced dozens of duplicate step rows per
+   * checkpoint. Those wrappers are also omitted as "enclosing" steps for generic pw:api description folding.
+   */
+  private isExploreChimpSyntheticWrapperTitle(title: string): boolean {
+    return this.isExploreChimpAnalyticsStepTitle(title) || title.startsWith('ScreenState:');
+  }
+
+  /** Nearest enclosing `test.step` that is not an ExploreChimp synthetic wrapper. */
+  private getInnermostEnclosingTestStepTitle(step: TestStep): string | undefined {
+    let p: TestStep | undefined = step.parent;
+    while (p) {
+      if (p.category === 'test.step' && !this.isExploreChimpSyntheticWrapperTitle(p.title)) {
+        return p.title;
+      }
+      p = p.parent;
+    }
+    return undefined;
+  }
+
+  /** True if any ancestor `test.step` is ExploreChimp DOM/screenshot/etc. or ScreenState wait — suppress child pw:api rows. */
+  private hasExploreChimpSyntheticWrapperAncestor(step: TestStep): boolean {
+    let p: TestStep | undefined = step.parent;
+    while (p) {
+      if (p.category === 'test.step' && this.isExploreChimpSyntheticWrapperTitle(p.title)) {
+        return true;
+      }
+      p = p.parent;
+    }
+    return false;
   }
 
   private getStepDescription(step: TestStep): string {

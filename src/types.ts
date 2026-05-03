@@ -97,6 +97,8 @@ export interface SmartTestExecutionReport {
   completedAtMillis?: number;
   branchName?: string;  // CI: from git (e.g. GITHUB_REF_NAME); not available in platform run
   branchId?: number;    // Platform run: our entity id; when set, backend uses for unique test resolution
+  /** ExploreChimp: matches the journey execution id and the persisted execution job id after ingest. */
+  journeyExecutionId?: string;
 }
 
 export interface IngestSmartTestExecutionReportRequest {

@@ -7,31 +7,7 @@ import {
 } from './types';
 
 /**
- * Convert camelCase keys to snake_case recursively
- */
-function toSnakeCase(obj: unknown): unknown {
-  if (obj === null || obj === undefined) {
-    return obj;
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.map(toSnakeCase);
-  }
-
-  if (typeof obj === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      const snakeKey = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-      result[snakeKey] = toSnakeCase(value);
-    }
-    return result;
-  }
-
-  return obj;
-}
-
-/**
- * Convert snake_case keys to camelCase recursively
+ * Convert response keys to camelCase recursively (backend uses protobuf JSON, mostly camelCase).
  */
 function toCamelCase(obj: unknown): unknown {
   if (obj === null || obj === undefined) {
@@ -90,8 +66,7 @@ export class TestChimpApiClient {
   async ingestExecutionReport(
     report: SmartTestExecutionReport
   ): Promise<IngestSmartTestExecutionReportResponse> {
-    // Convert camelCase to snake_case for the API
-    const snakeCaseReport = toSnakeCase({ report });
+    const body = { report };
 
     try {
       // Always log when sending reports (not just when verbose)
@@ -111,12 +86,8 @@ export class TestChimpApiClient {
         }
       }
 
-      const response = await this.client.post(
-        '/api/ingest_smarttest_execution_report',
-        snakeCaseReport
-      );
+      const response = await this.client.post('/api/ingest_smarttest_execution_report', body);
 
-      // Convert response from snake_case to camelCase
       return toCamelCase(response.data) as IngestSmartTestExecutionReportResponse;
     } catch (error) {
       if (error instanceof AxiosError) {
@@ -219,11 +190,7 @@ export class TestChimpApiClient {
   }
 
   /**
-   * Platform mode: send final job detail on test end (upsert + scenario coverage).
-   * POST {backend}/api/platform/test_end with jobId and jobDetail.
-   */
-  /**
-   * Local ExploreChimp: persist journey log and mark journey_execution completed.
+   * Local ExploreChimp: persist journey log and mark the journey execution completed.
    * POST /smart-test/explorechimp/journey_execution_end
    */
   async explorechimpJourneyExecutionEnd(body: {

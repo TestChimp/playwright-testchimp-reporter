@@ -287,6 +287,11 @@ export interface AnalyzeDataSourcesRequest {
   analyzedDataSource?: DataSource;
   networkRequestHash?: string;
   testId?: string;
+  /** Ingest-aligned path tuple for featureservice to resolve backend SmartTest id (agents.proto resolution_*). */
+  resolutionFolderPath?: string;
+  resolutionFileName?: string;
+  resolutionSuitePath?: string[];
+  resolutionTestName?: string;
   /** Full or compacted axe `analyze()` JSON; often sent with DOM_SOURCE together with or without `domSnapshotPayload`. */
   axeResultsJson?: string;
 }

@@ -100,6 +100,13 @@ export interface ExploreChimpPageMeta {
   journeyExecutionId: string;
   journeyId: string;
   testId: string;
+  /** Ingest-aligned tuple; featureservice resolves backend SmartTest id (see agents.proto resolution_*). */
+  analyzeResolutionPayload: {
+    resolutionFolderPath: string;
+    resolutionFileName: string;
+    resolutionSuitePath: string[];
+    resolutionTestName: string;
+  };
   /** Playwright testInfo.retry — used with testId for stable analytics step ids. */
   testRetry: number;
   projectRootDir: string;
@@ -403,6 +410,12 @@ export function applyExploreChimpPageFixture(test: any): any {
         journeyExecutionId,
         journeyId,
         testId: String(testInfo.testId ?? ''),
+        analyzeResolutionPayload: {
+          resolutionFolderPath: dp.folderPath,
+          resolutionFileName: dp.fileName,
+          resolutionSuitePath: [...dp.suitePath],
+          resolutionTestName: dp.testName,
+        },
         testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
         projectRootDir,
       };
@@ -474,6 +487,7 @@ export async function runExploreChimpMarkScreenState(
   const prior = buffers.priorMarkedScreen;
   const current = { name: screen, state };
   const branchName = getBranchName();
+  const resolutionFields = meta.analyzeResolutionPayload;
 
   const wantNetwork = sources.has('NETWORK');
   const regex = wantNetwork ? parseNetworkRegex() : null;
@@ -493,6 +507,7 @@ export async function runExploreChimpMarkScreenState(
           journeyExecutionId: meta.journeyExecutionId,
           journeyId: meta.journeyId,
           testId: meta.testId,
+          ...resolutionFields,
           branchName: branchName ?? '',
           stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
           analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
@@ -519,6 +534,7 @@ export async function runExploreChimpMarkScreenState(
             journeyExecutionId: meta.journeyExecutionId,
             journeyId: meta.journeyId,
             testId: meta.testId,
+            ...resolutionFields,
             branchName: branchName ?? '',
             stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
             analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
@@ -550,6 +566,7 @@ export async function runExploreChimpMarkScreenState(
             journeyExecutionId: meta.journeyExecutionId,
             journeyId: meta.journeyId,
             testId: meta.testId,
+            ...resolutionFields,
             branchName: branchName ?? '',
             stepId: exploreChimpAnalyticsStepId(meta, metricsTitle),
             analyzedDataSource: DataSourceEnum.METRICS_SOURCE,
@@ -574,6 +591,7 @@ export async function runExploreChimpMarkScreenState(
         journeyExecutionId: meta.journeyExecutionId,
         journeyId: meta.journeyId,
         testId: meta.testId,
+        ...resolutionFields,
         branchName: branchName ?? '',
         stepId: exploreChimpAnalyticsStepId(meta, shotTitle),
         analyzedDataSource: DataSourceEnum.SCREENSHOT_SOURCE,
@@ -607,6 +625,7 @@ export async function runExploreChimpMarkScreenState(
         journeyExecutionId: meta.journeyExecutionId,
         journeyId: meta.journeyId,
         testId: meta.testId,
+        ...resolutionFields,
         branchName: branchName ?? '',
         stepId: exploreChimpAnalyticsStepId(meta, domTitle),
         analyzedDataSource: DataSourceEnum.DOM_SOURCE,

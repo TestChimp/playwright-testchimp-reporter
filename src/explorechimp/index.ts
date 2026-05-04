@@ -56,6 +56,7 @@ import {
 } from './agents-explorechimp-json';
 import { cleanHtml } from './clean-html';
 import { compactAxeResultsForUpload } from './axe-compact';
+import { registerExploreChimpAnalyticsStepScreenState } from './analytics-step-screen-state-registry';
 
 export { DataSourceEnum };
 export type {
@@ -481,6 +482,11 @@ export async function runExploreChimpMarkScreenState(
   if (prior) {
     if (sources.has('CONSOLE') && buffers.consoleRows.length > 0) {
       const consoleTitle = `Analyzing Console for Screen-state ${prior.name} | ${prior.state}`;
+      const priorScreenState = { name: prior.name, state: prior.state };
+      registerExploreChimpAnalyticsStepScreenState(
+        exploreChimpAnalyticsStepId(meta, consoleTitle),
+        priorScreenState
+      );
       await test.step(consoleTitle, async () => {
         await postAnalyze(client, {
           explorationId,
@@ -490,7 +496,7 @@ export async function runExploreChimpMarkScreenState(
           branchName: branchName ?? '',
           stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
           analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
-          screenState: { name: prior.name, state: prior.state },
+          screenState: priorScreenState,
           consoleLogsPayload: buildConsoleLogsPayload(buffers.consoleRows),
           networkRequestHash: '',
         });
@@ -502,6 +508,11 @@ export async function runExploreChimpMarkScreenState(
       if (netRows.length > 0) {
         const networkTitle = `Analyzing Network for Screen-state ${prior.name} | ${prior.state}`;
         const hash = hashNetworkBatch(netRows);
+        const priorNetScreenState = { name: prior.name, state: prior.state };
+        registerExploreChimpAnalyticsStepScreenState(
+          exploreChimpAnalyticsStepId(meta, networkTitle),
+          priorNetScreenState
+        );
         await test.step(networkTitle, async () => {
           await postAnalyze(client, {
             explorationId,
@@ -511,7 +522,7 @@ export async function runExploreChimpMarkScreenState(
             branchName: branchName ?? '',
             stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
             analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
-            screenState: { name: prior.name, state: prior.state },
+            screenState: priorNetScreenState,
             apiRequestsPayload: buildApiRequestsPayload(netRows),
             networkRequestHash: hash,
           });
@@ -528,6 +539,11 @@ export async function runExploreChimpMarkScreenState(
         metricsPayload = null;
       }
       if (metricsPayload) {
+        const priorMetricsScreenState = { name: prior.name, state: prior.state };
+        registerExploreChimpAnalyticsStepScreenState(
+          exploreChimpAnalyticsStepId(meta, metricsTitle),
+          priorMetricsScreenState
+        );
         await test.step(metricsTitle, async () => {
           await postAnalyze(client, {
             explorationId,
@@ -537,7 +553,7 @@ export async function runExploreChimpMarkScreenState(
             branchName: branchName ?? '',
             stepId: exploreChimpAnalyticsStepId(meta, metricsTitle),
             analyzedDataSource: DataSourceEnum.METRICS_SOURCE,
-            screenState: { name: prior.name, state: prior.state },
+            screenState: priorMetricsScreenState,
             metricsPayload,
             networkRequestHash: '',
           });
@@ -549,6 +565,7 @@ export async function runExploreChimpMarkScreenState(
   // --- Current screen: screenshot + DOM (DOM + axe = single request, single Playwright step)
   if (sources.has('SCREENSHOT')) {
     const shotTitle = `Analyzing Screenshot for Screen-state ${current.name} | ${current.state}`;
+    registerExploreChimpAnalyticsStepScreenState(exploreChimpAnalyticsStepId(meta, shotTitle), current);
     await test.step(shotTitle, async () => {
       const jpeg = await page.screenshot({ type: 'jpeg', quality: 60, fullPage: false });
       const gcpPath = await uploadScreenshot(client, jpeg);
@@ -569,6 +586,7 @@ export async function runExploreChimpMarkScreenState(
 
   if (sources.has('DOM')) {
     const domTitle = `Analyzing DOM for Screen-state ${current.name} | ${current.state}`;
+    registerExploreChimpAnalyticsStepScreenState(exploreChimpAnalyticsStepId(meta, domTitle), current);
     await test.step(domTitle, async () => {
       let html = '';
       try {

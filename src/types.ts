@@ -49,6 +49,8 @@ export interface SmartTestExecutionStep {
   code?: string;
   screenshotBase64?: string;  // Base64 encoded screenshot (only for failing steps; deprecated in favor of screenshotPath)
   screenshotPath?: string;    // GCS path to screenshot (preferred)
+  /** Populated for ExploreChimp analytics steps (same values as analyze_data_sources / markScreenState). */
+  screenState?: { name: string; state: string };
   status: StepExecutionStatus;
   error?: string;
   wasRepaired?: boolean;

@@ -33,6 +33,7 @@ import {
   stableJourneyExecutionId,
 } from './utils';
 import { isExploreChimpEnabled } from './explorechimp/index';
+import { consumeExploreChimpAnalyticsStepScreenState } from './explorechimp/analytics-step-screen-state-registry';
 import path from 'path';
 
 /**
@@ -385,6 +386,11 @@ export class TestChimpReporter implements Reporter {
       stepId = stableExploreChimpAnalyticsStepId(test.id, result.retry, step.title);
     }
 
+    const exploreChimpScreenState =
+      step.category === 'test.step' && this.isExploreChimpAnalyticsStepTitle(step.title)
+        ? consumeExploreChimpAnalyticsStepScreenState(stepId)
+        : undefined;
+
     const executionStep: SmartTestExecutionStep = {
       stepId,
       description: desc,
@@ -395,7 +401,8 @@ export class TestChimpReporter implements Reporter {
       pwStepCategory: step.category,
       durationMs: step.duration,
       pwError: this.toPlaywrightError(step.error),
-      wasRepaired: false
+      wasRepaired: false,
+      ...(exploreChimpScreenState ? { screenState: exploreChimpScreenState } : {})
     };
 
     execution.steps.push(executionStep);

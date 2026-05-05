@@ -637,14 +637,17 @@ export class TestChimpReporter implements Reporter {
       console.log(`[TestChimp] Waiting for ${this.pendingOperations.length} pending operations to complete...`);
       await Promise.allSettled(this.pendingOperations);
     }
+    const suppressExplorationEnd = getEnvVar('TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END', '') === 'true';
     if (this.isEnabled && this.apiClient && isExploreChimpEnabled()) {
       const explorationId = this.batchInvocationId?.trim();
-      if (explorationId) {
+      if (explorationId && !suppressExplorationEnd) {
         try {
           await this.apiClient.explorechimpExplorationEnd({ explorationId });
         } catch (e) {
           console.error('[TestChimp] explorechimp/exploration_end failed:', e);
         }
+      } else if (explorationId && suppressExplorationEnd) {
+        console.log('[TestChimp] ExploreChimp exploration_end suppressed by TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END=true');
       }
     }
     if (this.options.verbose) {

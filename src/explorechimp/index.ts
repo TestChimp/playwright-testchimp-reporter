@@ -3,6 +3,9 @@
  * Wired automatically by `installTrueCoverage` / `installTestChimp` — do not import this module from app code.
  * With ExploreChimp on, call markers via the Playwright fixture: `test('…', async ({ markScreenState }) => { … })`.
  * Env: TESTCHIMP_BACKEND_URL, TESTCHIMP_API_KEY, TESTCHIMP_BATCH_INVOCATION_ID (exploration id).
+ * Branch for analyze payloads: every `POST .../analyze_explorechimp_data_sources` body includes `branchName`
+ * from {@link getBranchName} — set **`TESTCHIMP_BRANCH_NAME`** (preferred) or **`TESTCHIMP_BRANCH`** locally so
+ * the server can resolve `branch_id` on explorations and bugs (CI git envs are used when unset).
  * Optional: EXPLORECHIMP_SOURCES_TO_ANALYZE, EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE (required when NETWORK is listed),
  * EXPLORECHIMP_LONG_TASK_THRESHOLD_MS (default 50; matches scriptservice watcher long-task gate).
  * DOM/axe payload caps: EXPLORECHIMP_DOM_MAX_CHARS (default 32000), EXPLORECHIMP_AXE_MAX_VIOLATIONS (default 25),
@@ -486,7 +489,8 @@ export async function runExploreChimpMarkScreenState(
   const buffers = getBuffers(page);
   const prior = buffers.priorMarkedScreen;
   const current = { name: screen, state };
-  const branchName = getBranchName();
+  /** Same resolution order as execution reports when reporter uses {@link getBranchName} in buildReport. */
+  const branchName = getBranchName() ?? '';
   const resolutionFields = meta.analyzeResolutionPayload;
 
   const wantNetwork = sources.has('NETWORK');
@@ -508,7 +512,7 @@ export async function runExploreChimpMarkScreenState(
           journeyId: meta.journeyId,
           testId: meta.testId,
           ...resolutionFields,
-          branchName: branchName ?? '',
+          branchName,
           stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
           analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
           screenState: priorScreenState,
@@ -535,7 +539,7 @@ export async function runExploreChimpMarkScreenState(
             journeyId: meta.journeyId,
             testId: meta.testId,
             ...resolutionFields,
-            branchName: branchName ?? '',
+            branchName,
             stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
             analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
             screenState: priorNetScreenState,
@@ -567,7 +571,7 @@ export async function runExploreChimpMarkScreenState(
             journeyId: meta.journeyId,
             testId: meta.testId,
             ...resolutionFields,
-            branchName: branchName ?? '',
+            branchName,
             stepId: exploreChimpAnalyticsStepId(meta, metricsTitle),
             analyzedDataSource: DataSourceEnum.METRICS_SOURCE,
             screenState: priorMetricsScreenState,
@@ -592,7 +596,7 @@ export async function runExploreChimpMarkScreenState(
         journeyId: meta.journeyId,
         testId: meta.testId,
         ...resolutionFields,
-        branchName: branchName ?? '',
+        branchName,
         stepId: exploreChimpAnalyticsStepId(meta, shotTitle),
         analyzedDataSource: DataSourceEnum.SCREENSHOT_SOURCE,
         screenState: { name: current.name, state: current.state },
@@ -626,7 +630,7 @@ export async function runExploreChimpMarkScreenState(
         journeyId: meta.journeyId,
         testId: meta.testId,
         ...resolutionFields,
-        branchName: branchName ?? '',
+        branchName,
         stepId: exploreChimpAnalyticsStepId(meta, domTitle),
         analyzedDataSource: DataSourceEnum.DOM_SOURCE,
         screenState: { name: current.name, state: current.state },

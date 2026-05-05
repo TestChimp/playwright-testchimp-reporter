@@ -280,6 +280,7 @@ export interface AnalyzeDataSourcesRequest {
   journeyExecutionId?: string;
   journeyId?: string;
   explorationId?: string;
+  /** Git branch label; server resolves `branch_id`. Prefer env `TESTCHIMP_BRANCH_NAME` (see `getBranchName()` in `src/utils.ts`). */
   branchName?: string;
   screenState?: ScreenState;
   projectId?: string;

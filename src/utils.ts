@@ -330,7 +330,8 @@ export function deriveTestsFolder(_projectRootDir: string): string {
 }
 
 /**
- * Get current branch name from CI/env (for TrueCoverage ci-test-info).
+ * Current git branch name from env / CI (TrueCoverage ci-test-info, SmartTest execution reports, ExploreChimp
+ * `branchName` on `analyze_explorechimp_data_sources`).
  */
 export function getBranchName(): string | undefined {
   const fromEnv =

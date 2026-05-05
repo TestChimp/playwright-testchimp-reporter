@@ -26,6 +26,7 @@ import {
   derivePaths,
   generateStepId,
   generateUUID,
+  getBranchName,
   getEnvVar,
   normalizeManifestFolderPath,
   resolveManifestEntryFromRuntime,
@@ -746,12 +747,8 @@ export class TestChimpReporter implements Reporter {
   ): SmartTestExecutionReport {
     // Derive paths from test location
     const paths = derivePaths(test, this.testsFolder, this.config.rootDir, this.options.verbose);
-    const branchName =
-      getEnvVar('TESTCHIMP_BRANCH', '') ||
-      getEnvVar('GITHUB_HEAD_REF', '') ||
-      getEnvVar('GITHUB_REF_NAME', '') ||
-      getEnvVar('CI_COMMIT_REF_NAME', '') ||
-      undefined;
+    /** Align with ExploreChimp analyze payloads (`getBranchName` in explorechimp/index): TESTCHIMP_BRANCH_NAME first. */
+    const branchName = getBranchName();
     // Platform run: scriptservice sets TESTCHIMP_BRANCH_ID (our entity id) for unique test resolution; CI does not have it
     const branchIdRaw = getEnvVar('TESTCHIMP_BRANCH_ID', '');
     const branchId = branchIdRaw ? parseInt(branchIdRaw, 10) : undefined;

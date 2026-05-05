@@ -26,7 +26,7 @@
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
  * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
- * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module.
+ * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module. Set **`TESTCHIMP_BRANCH_NAME`** (or `TESTCHIMP_BRANCH`) locally so analyze requests send `branchName` and the server can persist `branch_id`.
  */
 
 export { TestChimpReporter } from './testchimp-reporter';

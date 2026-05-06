@@ -5,6 +5,18 @@ import {
   SmartTestExecutionReport,
   SmartTestExecutionJobDetail
 } from './types';
+import { getEnvVar } from './utils';
+
+/** Default cap for most JSON API calls (ms). Override with TESTCHIMP_REQUEST_TIMEOUT_MS. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+/** Cap for large payloads or server-heavy routes (platform test_end, ingest, journey_execution_end). Override with TESTCHIMP_LONG_REQUEST_TIMEOUT_MS. */
+const DEFAULT_LONG_REQUEST_TIMEOUT_MS = 600_000;
+
+function parsePositiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  if (!raw?.trim()) return fallback;
+  const n = parseInt(raw.trim(), 10);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 3_600_000) : fallback;
+}
 
 /**
  * Convert response keys to camelCase recursively (backend uses protobuf JSON, mostly camelCase).
@@ -38,11 +50,24 @@ export class TestChimpApiClient {
   private apiKey: string;
   private projectId: string;
   private verbose: boolean;
+  /** Upper bound for typical JSON POSTs (step_end, repair_*, exploration_end, etc.). */
+  private readonly requestTimeoutMs: number;
+  /** Upper bound for large bodies or server-heavy handlers (test_end, ingest, journey_execution_end). */
+  private readonly longRequestTimeoutMs: number;
 
   constructor(apiUrl: string, apiKey: string, projectId: string, verbose: boolean = false) {
     this.apiKey = apiKey;
     this.projectId = projectId;
     this.verbose = verbose;
+
+    this.requestTimeoutMs = parsePositiveTimeoutMs(
+      getEnvVar('TESTCHIMP_REQUEST_TIMEOUT_MS'),
+      DEFAULT_REQUEST_TIMEOUT_MS
+    );
+    this.longRequestTimeoutMs = parsePositiveTimeoutMs(
+      getEnvVar('TESTCHIMP_LONG_REQUEST_TIMEOUT_MS'),
+      DEFAULT_LONG_REQUEST_TIMEOUT_MS
+    );
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -56,7 +81,7 @@ export class TestChimpApiClient {
     this.client = axios.create({
       baseURL: apiUrl,
       headers,
-      timeout: 30000
+      timeout: this.requestTimeoutMs
     });
   }
 
@@ -86,7 +111,9 @@ export class TestChimpApiClient {
         }
       }
 
-      const response = await this.client.post('/api/ingest_smarttest_execution_report', body);
+      const response = await this.client.post('/api/ingest_smarttest_execution_report', body, {
+        timeout: this.longRequestTimeoutMs
+      });
 
       return toCamelCase(response.data) as IngestSmartTestExecutionReportResponse;
     } catch (error) {
@@ -178,7 +205,7 @@ export class TestChimpApiClient {
       if (this.verbose) {
         console.log(`[TestChimp] platform/step_end jobId=${jobId} steps=${jobDetail.steps?.length ?? 0} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
       }
-      await this.client.post('/api/platform/step_end', body);
+      await this.client.post('/api/platform/step_end', body, { timeout: this.requestTimeoutMs });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
@@ -202,7 +229,9 @@ export class TestChimpApiClient {
     errorMessage?: string;
   }): Promise<void> {
     try {
-      await this.client.post('/smart-test/explorechimp/journey_execution_end', body);
+      await this.client.post('/smart-test/explorechimp/journey_execution_end', body, {
+        timeout: this.longRequestTimeoutMs
+      });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
@@ -219,7 +248,9 @@ export class TestChimpApiClient {
    */
   async explorechimpExplorationEnd(body: { explorationId: string }): Promise<void> {
     try {
-      await this.client.post('/smart-test/explorechimp/exploration_end', body);
+      await this.client.post('/smart-test/explorechimp/exploration_end', body, {
+        timeout: this.requestTimeoutMs
+      });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
@@ -236,7 +267,7 @@ export class TestChimpApiClient {
       if (this.verbose) {
         console.log(`[TestChimp] platform/test_end jobId=${jobId} status=${jobDetail.status}`);
       }
-      await this.client.post('/api/platform/test_end', body);
+      await this.client.post('/api/platform/test_end', body, { timeout: this.longRequestTimeoutMs });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
@@ -261,7 +292,7 @@ export class TestChimpApiClient {
   async repairStepEnd(jobId: string, event: Record<string, unknown>): Promise<void> {
     try {
       const body = { jobId, event };
-      await this.client.post('/api/platform/repair_step_end', body);
+      await this.client.post('/api/platform/repair_step_end', body, { timeout: this.requestTimeoutMs });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
@@ -279,7 +310,7 @@ export class TestChimpApiClient {
   async repairTestEnd(jobId: string, summary: Record<string, unknown>): Promise<void> {
     try {
       const body = { jobId, summary };
-      await this.client.post('/api/platform/repair_test_end', body);
+      await this.client.post('/api/platform/repair_test_end', body, { timeout: this.requestTimeoutMs });
     } catch (error) {
       if (error instanceof AxiosError) {
         const status = error.response?.status;

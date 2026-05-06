@@ -99,7 +99,12 @@ export class TestChimpReporter implements Reporter {
 
   // Flag to indicate if reporter is properly configured
   private isEnabled: boolean = false;
-  private pendingOperations: Promise<any>[] = [];
+  /**
+   * Fire-and-forget HTTP tails keyed by scriptservice job id (manifest jobId for platform/step_end,
+   * TESTCHIMP_REPAIR_JOB_ID for repair_step_end). Drains in onTestEnd only await that job's bucket so
+   * parallel tests in the same worker do not block each other. onEnd drains every bucket.
+   */
+  private pendingOperationsByJobId: Map<string, Promise<any>[]> = new Map();
 
   constructor(options: TestChimpReporterOptions = {}) {
     // Env wins over playwright.config reporter options so repair/platform runs can
@@ -347,7 +352,7 @@ export class TestChimpReporter implements Reporter {
         const p = this.apiClient.repairStepEnd(jobId, event).catch((err) => {
           console.error(`[TestChimp] repair_step_end failed jobId=${jobId}:`, err instanceof Error ? err.message : err);
         });
-        this.pendingOperations.push(p);
+        this.pushPendingForJob(jobId, p);
       }
       // Continue capturing steps locally for consistency (no-op for repair UI today).
     }
@@ -434,7 +439,7 @@ export class TestChimpReporter implements Reporter {
             console.error(`[TestChimp] platform/step_end failed jobId=${jobId}:`, err instanceof Error ? err.message : err);
             }
           );
-          this.pendingOperations.push(p);
+          this.pushPendingForJob(jobId, p);
       } else {
         console.warn(
           `[TestChimp] platform/step_end skipped: no jobId in manifest for folderPath="${paths.folderPath}" normalizedFolderPath="${normalizeManifestFolderPath(paths.folderPath)}" fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}" candidates=${this.getManifestDebugCandidates(paths.fileName, paths.testName)}`
@@ -444,8 +449,6 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
-    // Do not push this promise onto pendingOperations: drainPendingApiWork() awaits that queue
-    // before journey_execution_end, and including this call would deadlock.
     await this._onTestEndInner(test, result);
   }
 
@@ -508,10 +511,11 @@ export class TestChimpReporter implements Reporter {
       if (isFinalAttempt && this.apiClient) {
         const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
         const resolved = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
-        if (resolved?.jobId) {
-          const jobId = resolved.jobId;
+        const platformJobId = resolved?.jobId?.trim() || undefined;
+        if (platformJobId) {
+          const jobId = platformJobId;
           console.log(
-            `[TestChimp] platform/test_end resolve strategy=${resolved.strategy} jobId=${jobId} fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
+            `[TestChimp] platform/test_end resolve strategy=${resolved?.strategy} jobId=${jobId} fileName="${paths.fileName}" suitePath=${JSON.stringify(paths.suitePath)} testName="${paths.testName}"`
           );
           if (this.options.captureScreenshots) {
             await this.attachScreenshotsToFailingSteps(execution.steps, result.attachments);
@@ -521,6 +525,9 @@ export class TestChimpReporter implements Reporter {
           if (traceGcsPath) {
             jobDetail.traceGcsPath = traceGcsPath;
           }
+          // Finish this job's platform/step_end before test_end: test_end marks the job terminal and
+          // scriptservice ignores late step_end; in-flight step_end after terminal risks stalls or lost payloads.
+          await this.drainPendingForJob(jobId);
           try {
             await this.apiClient.platformTestEnd(jobId, jobDetail);
             console.log(`[TestChimp] platform/test_end sent: ${test.title} jobId=${jobId} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
@@ -563,10 +570,16 @@ export class TestChimpReporter implements Reporter {
             }
           }
         }
+        if (platformJobId) {
+          await this.drainPendingForJob(platformJobId);
+        }
         try {
           await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution, paths);
         } catch (e) {
           console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
+        }
+        if (platformJobId) {
+          await this.drainPendingForJob(platformJobId);
         }
         // Cleanup all attempts for this test (we have attempts 0..result.retry)
         for (let r = 0; r <= result.retry; r++) {
@@ -633,10 +646,11 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onEnd(result: FullResult): Promise<void> {
-    if (this.pendingOperations.length > 0) {
-      console.log(`[TestChimp] Waiting for ${this.pendingOperations.length} pending operations to complete...`);
-      await Promise.allSettled(this.pendingOperations);
+    const pendingStart = this.countTotalPendingOperations();
+    if (pendingStart > 0) {
+      console.log(`[TestChimp] Waiting for ${pendingStart} pending operations to complete...`);
     }
+    await this.drainAllPendingBuckets();
     const suppressExplorationEnd = getEnvVar('TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END', '') === 'true';
     if (this.isEnabled && this.apiClient && isExploreChimpEnabled()) {
       const explorationId = this.batchInvocationId?.trim();
@@ -714,9 +728,6 @@ export class TestChimpReporter implements Reporter {
     if (!journeyExecutionId) {
       return;
     }
-    // Ensure platform/step_end (and other fire-and-forget API work) has finished so scriptservice
-    // has persisted steps and filed bugs before journey_execution_end aggregates BugEntity rows.
-    await this.drainPendingApiWork();
     await this.apiClient.explorechimpJourneyExecutionEnd({
       journeyId: test.id,
       journeyExecutionId,
@@ -727,14 +738,50 @@ export class TestChimpReporter implements Reporter {
     });
   }
 
+  private pushPendingForJob(jobId: string, p: Promise<any>): void {
+    const id = jobId.trim();
+    if (!id) return;
+    let bucket = this.pendingOperationsByJobId.get(id);
+    if (!bucket) {
+      bucket = [];
+      this.pendingOperationsByJobId.set(id, bucket);
+    }
+    bucket.push(p);
+  }
+
   /**
-   * Await all in-flight async work queued via pendingOperations (e.g. platform/step_end).
-   * New work pushed while draining is picked up in subsequent loop iterations.
+   * Await in-flight HTTP for a single platform/repair job id. Work pushed while draining is picked up
+   * in subsequent loop iterations for the same bucket.
    */
-  private async drainPendingApiWork(): Promise<void> {
-    while (this.pendingOperations.length > 0) {
-      const batch = this.pendingOperations.splice(0, this.pendingOperations.length);
+  private async drainPendingForJob(jobId: string): Promise<void> {
+    const id = jobId.trim();
+    if (!id) return;
+    while (true) {
+      const bucket = this.pendingOperationsByJobId.get(id);
+      if (!bucket || bucket.length === 0) {
+        if (bucket) {
+          this.pendingOperationsByJobId.delete(id);
+        }
+        break;
+      }
+      const batch = bucket.splice(0, bucket.length);
       await Promise.allSettled(batch);
+    }
+  }
+
+  private countTotalPendingOperations(): number {
+    let n = 0;
+    for (const arr of this.pendingOperationsByJobId.values()) {
+      n += arr.length;
+    }
+    return n;
+  }
+
+  /** Run shutdown: wait for every job bucket (parallel tests may each have their own jobId). */
+  private async drainAllPendingBuckets(): Promise<void> {
+    while (this.pendingOperationsByJobId.size > 0) {
+      const keys = [...this.pendingOperationsByJobId.keys()];
+      await Promise.all(keys.map((k) => this.drainPendingForJob(k)));
     }
   }
 

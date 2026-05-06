@@ -444,9 +444,9 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
-    const p = this._onTestEndInner(test, result);
-    this.pendingOperations.push(p);
-    await p;
+    // Do not push this promise onto pendingOperations: drainPendingApiWork() awaits that queue
+    // before journey_execution_end, and including this call would deadlock.
+    await this._onTestEndInner(test, result);
   }
 
   private async _onTestEndInner(test: TestCase, result: TestResult): Promise<void> {
@@ -714,6 +714,9 @@ export class TestChimpReporter implements Reporter {
     if (!journeyExecutionId) {
       return;
     }
+    // Ensure platform/step_end (and other fire-and-forget API work) has finished so scriptservice
+    // has persisted steps and filed bugs before journey_execution_end aggregates BugEntity rows.
+    await this.drainPendingApiWork();
     await this.apiClient.explorechimpJourneyExecutionEnd({
       journeyId: test.id,
       journeyExecutionId,
@@ -722,6 +725,17 @@ export class TestChimpReporter implements Reporter {
       smartTestStatus: this.mapStatus(result.status),
       errorMessage: result.error?.message,
     });
+  }
+
+  /**
+   * Await all in-flight async work queued via pendingOperations (e.g. platform/step_end).
+   * New work pushed while draining is picked up in subsequent loop iterations.
+   */
+  private async drainPendingApiWork(): Promise<void> {
+    while (this.pendingOperations.length > 0) {
+      const batch = this.pendingOperations.splice(0, this.pendingOperations.length);
+      await Promise.allSettled(batch);
+    }
   }
 
   private scanTestRetries(suite: Suite): void {

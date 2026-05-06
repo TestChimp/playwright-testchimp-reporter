@@ -96,6 +96,7 @@ export class TestChimpReporter implements Reporter {
 
   // Platform mode: manifest (test identity -> jobId), loaded once in onBegin
   private jobManifest: JobManifestEntry[] = [];
+  private platformStepEndEnabled: boolean = false;
 
   // Flag to indicate if reporter is properly configured
   private isEnabled: boolean = false;
@@ -164,6 +165,8 @@ export class TestChimpReporter implements Reporter {
 
     if (this.options.executionMode === 'platform') {
       this.jobManifest = this.loadJobManifest();
+      this.platformStepEndEnabled =
+        (getEnvVar('TESTCHIMP_PLATFORM_STEP_END_ENABLED', 'false') || '').trim().toLowerCase() === 'true';
       const manifestPath =
         getEnvVar('TESTCHIMP_JOB_MANIFEST_PATH') ||
         (this.testsFolder ? path.join(this.testsFolder, '.testchimp-job-manifest.json') : '.testchimp-job-manifest.json');
@@ -175,6 +178,9 @@ export class TestChimpReporter implements Reporter {
           : '';
       console.log(
         `[TestChimp] Platform mode: manifest from ${resolvedPath} → ${this.jobManifest.length} entries${sample} (backend for step_end/test_end: ${backendUrl})`
+      );
+      console.log(
+        `[TestChimp] Platform mode: incremental platform/step_end is ${this.platformStepEndEnabled ? 'enabled' : 'disabled'} (TESTCHIMP_PLATFORM_STEP_END_ENABLED=${this.platformStepEndEnabled ? 'true' : 'false'})`
       );
     }
 
@@ -419,8 +425,9 @@ export class TestChimpReporter implements Reporter {
       );
     }
 
-    // Platform mode: after each step, send full job detail to scriptservice (blind upsert)
-    if (this.options.executionMode === 'platform' && this.apiClient) {
+    // Platform mode (optional): after each step, send full job detail to scriptservice (blind upsert).
+    // Default is disabled to keep platform behavior close to local/CI and avoid step_end/test_end races.
+    if (this.options.executionMode === 'platform' && this.apiClient && this.platformStepEndEnabled) {
       const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
       const resolved = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
       if (resolved?.jobId) {
@@ -525,9 +532,10 @@ export class TestChimpReporter implements Reporter {
           if (traceGcsPath) {
             jobDetail.traceGcsPath = traceGcsPath;
           }
-          // Finish this job's platform/step_end before test_end: test_end marks the job terminal and
-          // scriptservice ignores late step_end; in-flight step_end after terminal risks stalls or lost payloads.
-          await this.drainPendingForJob(jobId);
+          if (this.platformStepEndEnabled) {
+            // With incremental step_end enabled, flush in-flight step updates before final test_end.
+            await this.drainPendingForJob(jobId);
+          }
           try {
             await this.apiClient.platformTestEnd(jobId, jobDetail);
             console.log(`[TestChimp] platform/test_end sent: ${test.title} jobId=${jobId} retryAttemptLogs=${jobDetail.retryAttemptLogs?.length ?? 0}`);
@@ -570,7 +578,7 @@ export class TestChimpReporter implements Reporter {
             }
           }
         }
-        if (platformJobId) {
+        if (platformJobId && this.platformStepEndEnabled) {
           await this.drainPendingForJob(platformJobId);
         }
         try {
@@ -578,7 +586,7 @@ export class TestChimpReporter implements Reporter {
         } catch (e) {
           console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
         }
-        if (platformJobId) {
+        if (platformJobId && this.platformStepEndEnabled) {
           await this.drainPendingForJob(platformJobId);
         }
         // Cleanup all attempts for this test (we have attempts 0..result.retry)

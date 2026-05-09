@@ -373,93 +373,111 @@ export function attachExploreChimpInstrumentation(
 /**
  * Extends Playwright `test` with ExploreChimp page meta + buffers (only when `EXPLORECHIMP_ENABLED`).
  * Used from {@link installTrueCoverage} / {@link installTestChimp}; not required as a separate install.
+ *
+ * Playwright 1.59+ requires fixture functions to destructure the first argument (e.g. `{ page }`), not `(fixtures, use)`.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function runExploreChimpPageOrScreenFixture(
+  target: ExploreChimpTarget | undefined,
+  use: any,
+  testInfo: any
+): Promise<void> {
+  if (!target) {
+    throw new Error(
+      `[ExploreChimp] Missing "${fixtureKey}" fixture. Check TESTCHIMP_PROJECT_TYPE and runner fixture wiring.`
+    );
+  }
+  if (!isExploreChimpEnabled()) {
+    await use(target);
+    return;
+  }
+  const project = testInfo.project as { rootDir?: string };
+  const projectRootDir = project.rootDir ?? process.cwd();
+  const testsFolder = deriveTestsFolder(projectRootDir);
+  const manifest = loadJobManifestEntries(projectRootDir);
+  const dp = derivePathsFromTestInfo(
+    {
+      file: testInfo.file,
+      title: testInfo.title,
+      titlePath: testInfo.titlePath,
+      project: testInfo.project,
+    },
+    testsFolder,
+    projectRootDir
+  );
+  const resolved = resolveManifestEntryFromRuntime(manifest, {
+    folderPath: dp.folderPath,
+    fileName: dp.fileName,
+    suitePath: dp.suitePath,
+    testName: dp.testName,
+  });
+  const manifestJobId = resolved?.entry.jobId?.trim();
+  const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir)?.trim() || '';
+  const journeyId = String(testInfo.testId ?? '');
+  const retry = typeof testInfo.retry === 'number' ? testInfo.retry : 0;
+  const journeyExecutionId =
+    manifestJobId ||
+    (batchInvocationId && journeyId
+      ? stableJourneyExecutionId(journeyId, batchInvocationId, retry)
+      : '');
+  if (!manifestJobId && process.env.TESTCHIMP_EXECUTION_MODE === 'platform') {
+    console.warn(
+      '[ExploreChimp] No manifest jobId for this test — set TESTCHIMP_BATCH_INVOCATION_ID or add a manifest entry so journeyExecutionId is stable.'
+    );
+  }
+  if (!journeyExecutionId) {
+    console.warn(
+      '[ExploreChimp] Missing journeyExecutionId (need manifest jobId or TESTCHIMP_BATCH_INVOCATION_ID + Playwright test id). ExploreChimp backend calls will be skipped.'
+    );
+  }
+  const meta: ExploreChimpPageMeta = {
+    journeyExecutionId,
+    journeyId,
+    testId: String(testInfo.testId ?? ''),
+    analyzeResolutionPayload: {
+      resolutionFolderPath: dp.folderPath,
+      resolutionFileName: dp.fileName,
+      resolutionSuitePath: [...dp.suitePath],
+      resolutionTestName: dp.testName,
+    },
+    testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
+    projectRootDir,
+  };
+  (target as PageAugmented)[K_META] = meta;
+
+  const sources = parseExploreChimpSources();
+  const wantNetwork = sources.has('NETWORK');
+  const regex = wantNetwork ? parseNetworkRegex() : null;
+  if (wantNetwork && !regex) {
+    console.warn(
+      '[ExploreChimp] NETWORK listed in EXPLORECHIMP_SOURCES_TO_ANALYZE but EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE is missing — network capture disabled'
+    );
+  }
+  attachExploreChimpInstrumentation(target, {
+    recordNetwork: !!(wantNetwork && regex),
+    networkRegex: regex,
+  });
+  if (sources.has('METRICS') && !isMobileProjectType()) {
+    await installExploreChimpPerfMetricsObservers(target, parseExploreChimpLongTaskThresholdMs());
+  }
+
+  await use(target);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function applyExploreChimpPageFixture(test: any): any {
+  if (fixtureKey === 'screen') {
+    return test.extend({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      screen: async ({ screen }: { screen: any }, use: any, testInfo: any) => {
+        await runExploreChimpPageOrScreenFixture(screen, use, testInfo);
+      },
+    });
+  }
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    [fixtureKey]: async (fixtures: Record<string, unknown>, use: any, testInfo: any) => {
-      const target = fixtures[fixtureKey] as ExploreChimpTarget | undefined;
-      if (!target) {
-        throw new Error(
-          `[ExploreChimp] Missing "${fixtureKey}" fixture. Check TESTCHIMP_PROJECT_TYPE and runner fixture wiring.`
-        );
-      }
-      if (!isExploreChimpEnabled()) {
-        await use(target);
-        return;
-      }
-      const project = testInfo.project as { rootDir?: string };
-      const projectRootDir = project.rootDir ?? process.cwd();
-      const testsFolder = deriveTestsFolder(projectRootDir);
-      const manifest = loadJobManifestEntries(projectRootDir);
-      const dp = derivePathsFromTestInfo(
-        {
-          file: testInfo.file,
-          title: testInfo.title,
-          titlePath: testInfo.titlePath,
-          project: testInfo.project,
-        },
-        testsFolder,
-        projectRootDir
-      );
-      const resolved = resolveManifestEntryFromRuntime(manifest, {
-        folderPath: dp.folderPath,
-        fileName: dp.fileName,
-        suitePath: dp.suitePath,
-        testName: dp.testName,
-      });
-      const manifestJobId = resolved?.entry.jobId?.trim();
-      const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir)?.trim() || '';
-      const journeyId = String(testInfo.testId ?? '');
-      const retry = typeof testInfo.retry === 'number' ? testInfo.retry : 0;
-      const journeyExecutionId =
-        manifestJobId ||
-        (batchInvocationId && journeyId
-          ? stableJourneyExecutionId(journeyId, batchInvocationId, retry)
-          : '');
-      if (!manifestJobId && process.env.TESTCHIMP_EXECUTION_MODE === 'platform') {
-        console.warn(
-          '[ExploreChimp] No manifest jobId for this test — set TESTCHIMP_BATCH_INVOCATION_ID or add a manifest entry so journeyExecutionId is stable.'
-        );
-      }
-      if (!journeyExecutionId) {
-        console.warn(
-          '[ExploreChimp] Missing journeyExecutionId (need manifest jobId or TESTCHIMP_BATCH_INVOCATION_ID + Playwright test id). ExploreChimp backend calls will be skipped.'
-        );
-      }
-      const meta: ExploreChimpPageMeta = {
-        journeyExecutionId,
-        journeyId,
-        testId: String(testInfo.testId ?? ''),
-        analyzeResolutionPayload: {
-          resolutionFolderPath: dp.folderPath,
-          resolutionFileName: dp.fileName,
-          resolutionSuitePath: [...dp.suitePath],
-          resolutionTestName: dp.testName,
-        },
-        testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
-        projectRootDir,
-      };
-      (target as PageAugmented)[K_META] = meta;
-
-      const sources = parseExploreChimpSources();
-      const wantNetwork = sources.has('NETWORK');
-      const regex = wantNetwork ? parseNetworkRegex() : null;
-      if (wantNetwork && !regex) {
-        console.warn(
-          '[ExploreChimp] NETWORK listed in EXPLORECHIMP_SOURCES_TO_ANALYZE but EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE is missing — network capture disabled'
-        );
-      }
-      attachExploreChimpInstrumentation(target, {
-        recordNetwork: !!(wantNetwork && regex),
-        networkRegex: regex,
-      });
-      if (sources.has('METRICS') && !isMobileProjectType()) {
-        await installExploreChimpPerfMetricsObservers(target, parseExploreChimpLongTaskThresholdMs());
-      }
-
-      await use(target);
+    page: async ({ page }: { page: any }, use: any, testInfo: any) => {
+      await runExploreChimpPageOrScreenFixture(page, use, testInfo);
     },
   });
 }

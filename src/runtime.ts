@@ -36,29 +36,42 @@ export type MarkScreenStateFixture = (screenName: string, stateName?: string) =>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function addMarkScreenStateFixture(test: any): any {
+  // Playwright 1.59+ requires the fixture worker's first parameter to use object destructuring
+  // (e.g. `{ page }`), not a single positional `fixtures` object.
+  const buildMarkFn = (fixtureTarget: unknown): MarkScreenStateFixture => {
+    return async (screenName: string, stateName?: string) => {
+      if (isExploreChimpEnabled()) {
+        try {
+          await runExploreChimpMarkScreenState(fixtureTarget, screenName, stateName);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(`[TestChimp] ExploreChimp markScreenState failed (non-fatal): ${msg}`);
+          try {
+            await runTraceOnlyMarkScreenState(screenName, stateName);
+          } catch {
+            // Trace step is best-effort; never fail the test for analytics.
+          }
+        }
+      } else {
+        await runTraceOnlyMarkScreenState(screenName, stateName);
+      }
+    };
+  };
+
+  if (fixtureKey === 'screen') {
+    return test.extend({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      markScreenState: async ({ screen }: { screen: unknown }, use: any) => {
+        await use(buildMarkFn(screen));
+      },
+    });
+  }
+
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    markScreenState: async (fixtures: Record<string, unknown>, use: any) => {
-      const fixtureTarget = fixtures[fixtureKey];
-      const fn: MarkScreenStateFixture = async (screenName: string, stateName?: string) => {
-        if (isExploreChimpEnabled()) {
-          try {
-            await runExploreChimpMarkScreenState(fixtureTarget, screenName, stateName);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // eslint-disable-next-line no-console
-            console.warn(`[TestChimp] ExploreChimp markScreenState failed (non-fatal): ${msg}`);
-            try {
-              await runTraceOnlyMarkScreenState(screenName, stateName);
-            } catch {
-              // Trace step is best-effort; never fail the test for analytics.
-            }
-          }
-        } else {
-          await runTraceOnlyMarkScreenState(screenName, stateName);
-        }
-      };
-      await use(fn);
+    markScreenState: async ({ page }: { page: unknown }, use: any) => {
+      await use(buildMarkFn(page));
     },
   });
 }

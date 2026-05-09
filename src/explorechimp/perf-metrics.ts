@@ -3,7 +3,6 @@
  * (`agents.proto`) in the page and returns it to Node.
  */
 
-import type { Page } from '@playwright/test';
 import type {
   BoundingBox,
   InteractionLatencyEntry,
@@ -23,11 +22,14 @@ export function parseExploreChimpLongTaskThresholdMs(): number {
  * Injects observers on every new document (Playwright init script). Idempotent per document.
  */
 export async function installExploreChimpPerfMetricsObservers(
-  page: Page,
+  page: { addInitScript?: (...args: any[]) => Promise<void> | void },
   longTaskThresholdMs: number
 ): Promise<void> {
+  if (typeof page.addInitScript !== 'function') {
+    return;
+  }
   await page.addInitScript(
-    ({ longTaskThresholdMs: threshold }) => {
+    ({ longTaskThresholdMs: threshold }: { longTaskThresholdMs: number }) => {
       const g = globalThis as unknown as {
         __longTaskThreshold?: number;
         __exploreChimpPerfInstalled?: boolean;
@@ -362,9 +364,12 @@ export async function installExploreChimpPerfMetricsObservers(
 
 /** Same semantics as watcher.getMetricsSince — filters perf entries by wall-clock `since`. */
 export async function collectMetricsSince(
-  page: Page,
+  page: { evaluate?: <T, A = unknown>(fn: (arg: A) => T, arg: A) => Promise<T> },
   sinceTimestamp: number
 ): Promise<MetricsPayload> {
+  if (typeof page.evaluate !== 'function') {
+    throw new Error('Metrics collection requires fixture.evaluate');
+  }
   return page.evaluate<MetricsPayload, number>((since) => {
     type InteractionRow = {
       duration: number;
@@ -579,7 +584,12 @@ export async function collectMetricsSince(
 }
 
 /** Clears in-page metric buffers (watcher.resetMetrics). */
-export async function resetExploreChimpPerfMetricsBuffers(page: Page): Promise<void> {
+export async function resetExploreChimpPerfMetricsBuffers(
+  page: { evaluate?: (fn: () => void, arg?: unknown) => Promise<unknown> | void }
+): Promise<void> {
+  if (typeof page.evaluate !== 'function') {
+    return;
+  }
   await page.evaluate(() => {
     const w = globalThis as unknown as {
       __perfMetrics?: { entries: unknown[]; cls: number; startTime: number };

@@ -26,6 +26,8 @@
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
  * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
+ * Fixture/runtime switching: default web mode uses `page`; set `TESTCHIMP_PROJECT_TYPE=ios|android`
+ * (case-insensitive) to switch runtime fixture wiring to `screen`.
  * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module. Set **`TESTCHIMP_BRANCH_NAME`** (or `TESTCHIMP_BRANCH`) locally so analyze requests send `branchName` and the server can persist `branch_id`.
  */
 

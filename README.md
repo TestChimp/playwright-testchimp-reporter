@@ -1,6 +1,6 @@
 # @testchimp/playwright
 
-A [Playwright](https://playwright.dev/) reporter that sends test execution results to the [TestChimp](https://testchimp.io) platform. It powers **QA intelligence insights**, surfaces **AI-native steps** (e.g. `ai.act`, `ai.verify`) from the standard Playwright runner into TestChimp for CI, and **augments RUM events** from [@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) so test runs align with real user events for **TrueCoverage**.
+A [Playwright](https://playwright.dev/) / Mobilewright reporter that sends test execution results to the [TestChimp](https://testchimp.io) platform. It powers **QA intelligence insights**, surfaces **AI-native steps** (e.g. `ai.act`, `ai.verify`) from the test runner into TestChimp for CI, and **augments RUM events** from [@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) so test runs align with real user events for **TrueCoverage**.
 
 ---
 
@@ -39,7 +39,11 @@ Read more about TestChimps' TrueCoverage feature [here](https://docs.testchimp.i
 npm install @testchimp/playwright
 ```
 
-Peer dependency: `@playwright/test` (e.g. `>=1.40.0`).
+Peer dependency: `@playwright/test` (e.g. `>=1.40.0`) for web projects, and `mobilewright` for mobile projects.
+
+Runtime switching is controlled by `TESTCHIMP_PROJECT_TYPE`:
+- `web` or unset: uses Playwright fixture `page` (default, backward-compatible).
+- `ios` / `android` (case-insensitive): uses Mobilewright fixture `screen`.
 
 ---
 
@@ -74,6 +78,12 @@ For TrueCoverage, add the following import in your tests:
 import '@testchimp/playwright/runtime';
 ```
 
+For mobile projects, also set:
+
+```bash
+export TESTCHIMP_PROJECT_TYPE=ios  # or android
+```
+
 ### 2. Environment variables
 
 Set these so the reporter can talk to TestChimp (env vars override programmatic options):
@@ -85,6 +95,7 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
+| `TESTCHIMP_PROJECT_TYPE` | No | Fixture/runtime switch: `web` (default) or mobile values (`ios`/`android`). |
 
 If `TESTCHIMP_API_KEY` is missing, the reporter logs a warning and disables reporting (no request is sent).
 
@@ -143,6 +154,8 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **Subpath**: `@testchimp/playwright/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
 - **Subpath**: `@testchimp/playwright/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
+  - TrueCoverage CI metadata injection is currently web-only (`page` fixture).
+  - When `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, TrueCoverage injection is skipped and runtime fixtures focus on mobile marker behavior.
 
 ---
 

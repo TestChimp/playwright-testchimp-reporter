@@ -4,13 +4,13 @@
  *
  * Prefer `installTrueCoverage(mergedTest)` (or `installTestChimp`) on the same `test` object your specs use.
  * Screen/state markers: `test('…', async ({ markScreenState }) => { await markScreenState('Screen', 'state'); })`.
- * The same `markScreenState` fixture records a Playwright `test.step` when ExploreChimp is off, and runs ExploreChimp analytics when it is on.
- * Side-effect `import '@testchimp/playwright/runtime'` still registers on the root `@playwright/test` instance.
+ * The same `markScreenState` fixture records a runner `test.step` when ExploreChimp is off, and runs ExploreChimp analytics when it is on.
+ * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
+ * default `@playwright/test`, or `mobilewright` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  */
 
 import * as path from 'path';
 import { createRequire } from 'module';
-import type { Page } from '@playwright/test';
 import {
   derivePathsFromTestInfo,
   deriveTestsFolder,
@@ -18,13 +18,18 @@ import {
   readTestChimpBatchInvocationId,
 } from './utils';
 import {
-  applyExploreChimpPageFixture,
+  applyExploreChimpFixture,
   runExploreChimpMarkScreenState,
   isExploreChimpEnabled,
 } from './explorechimp';
+import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from './project-type';
 
-/** Resolve `@playwright/test` from the consumer project (same as side-effect import path). */
+/** Resolve test runtime module from the consumer project (web: Playwright, mobile: Mobilewright). */
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+const fixtureKey = getFixtureKey();
+const mobileProject = isMobileProjectType();
+const runtimeModuleName = getTestRuntimeModuleName();
+let warnedTrueCoverageMobileSkip = false;
 
 /** Bound screen/state marker from the `markScreenState` Playwright fixture. */
 export type MarkScreenStateFixture = (screenName: string, stateName?: string) => Promise<void>;
@@ -33,11 +38,12 @@ export type MarkScreenStateFixture = (screenName: string, stateName?: string) =>
 function addMarkScreenStateFixture(test: any): any {
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    markScreenState: async ({ page }: { page: Page }, use: any) => {
+    markScreenState: async (fixtures: Record<string, unknown>, use: any) => {
+      const fixtureTarget = fixtures[fixtureKey];
       const fn: MarkScreenStateFixture = async (screenName: string, stateName?: string) => {
         if (isExploreChimpEnabled()) {
           try {
-            await runExploreChimpMarkScreenState(page, screenName, stateName);
+            await runExploreChimpMarkScreenState(fixtureTarget, screenName, stateName);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             // eslint-disable-next-line no-console
@@ -63,59 +69,67 @@ function addMarkScreenStateFixture(test: any): any {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function installTrueCoverage(test: any): any {
-  const withCi = test.extend({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    page: async ({ page }: { page: any }, use: any, testInfo: any) => {
-      const project = testInfo.project as { rootDir?: string };
-      const projectRootDir = project.rootDir ?? process.cwd();
-      const testsFolder = deriveTestsFolder(projectRootDir);
-      const paths = derivePathsFromTestInfo(
-        testInfo as unknown as Parameters<typeof derivePathsFromTestInfo>[0],
-        testsFolder,
-        projectRootDir,
-        false
-      );
+  const withCi = mobileProject
+    ? test
+    : test.extend({
+        page: async ({ page }: { page: any }, use: any, testInfo: any) => {
+          const project = testInfo.project as { rootDir?: string };
+          const projectRootDir = project.rootDir ?? process.cwd();
+          const testsFolder = deriveTestsFolder(projectRootDir);
+          const paths = derivePathsFromTestInfo(
+            testInfo as unknown as Parameters<typeof derivePathsFromTestInfo>[0],
+            testsFolder,
+            projectRootDir,
+            false
+          );
 
-      const ciTestInfo: Record<string, unknown> = {
-        folderPath: paths.folderPath,
-        fileName: paths.fileName,
-        suitePath: paths.suitePath,
-        testName: paths.testName,
-      };
-      const branchName = getBranchName();
-      if (branchName) ciTestInfo.branchName = branchName;
-      const env = process.env.TESTCHIMP_ENV || process.env.TESTCHIMP_ENVIRONMENT;
-      if (env) ciTestInfo.environment = String(env).trim();
-      const release = process.env.TESTCHIMP_RELEASE || process.env.TESTCHIMP_RELEASE_NAME;
-      if (release) ciTestInfo.release = release;
-      const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir);
-      if (batchInvocationId) ciTestInfo.batchInvocationId = batchInvocationId;
+          const ciTestInfo: Record<string, unknown> = {
+            folderPath: paths.folderPath,
+            fileName: paths.fileName,
+            suitePath: paths.suitePath,
+            testName: paths.testName,
+          };
+          const branchName = getBranchName();
+          if (branchName) ciTestInfo.branchName = branchName;
+          const env = process.env.TESTCHIMP_ENV || process.env.TESTCHIMP_ENVIRONMENT;
+          if (env) ciTestInfo.environment = String(env).trim();
+          const release = process.env.TESTCHIMP_RELEASE || process.env.TESTCHIMP_RELEASE_NAME;
+          if (release) ciTestInfo.release = release;
+          const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir);
+          if (batchInvocationId) ciTestInfo.batchInvocationId = batchInvocationId;
 
-      const jsonString = JSON.stringify(ciTestInfo);
-      await page.addInitScript(
-        (info: string) => {
-          (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+          const jsonString = JSON.stringify(ciTestInfo);
+          await page.addInitScript(
+            (info: string) => {
+              (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+            },
+            jsonString
+          );
+
+          try {
+            await page.evaluate((info: string) => {
+              (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+            }, jsonString);
+          } catch {
+            // Ignore: page may be closed or not ready yet.
+          }
+
+          await use(page);
         },
-        jsonString
-      );
+      });
 
-      try {
-        await page.evaluate((info: string) => {
-          (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
-        }, jsonString);
-      } catch {
-        // Ignore: page may be closed or not ready yet.
-      }
-
-      await use(page);
-    },
-  });
+  if (mobileProject && !warnedTrueCoverageMobileSkip) {
+    // TrueCoverage CI metadata injection currently relies on Playwright page semantics.
+    // eslint-disable-next-line no-console
+    console.warn('[TestChimp] TrueCoverage instrumentation is web-only for now; skipping on mobile.');
+    warnedTrueCoverageMobileSkip = true;
+  }
 
   const withMark = addMarkScreenStateFixture(withCi);
   if (!isExploreChimpEnabled()) {
     return withMark;
   }
-  return applyExploreChimpPageFixture(withMark);
+  return applyExploreChimpFixture(withMark);
 }
 
 /** Same behavior as {@link installTrueCoverage} — umbrella name for TrueCoverage + ExploreChimp (via env). */
@@ -137,7 +151,7 @@ async function runTraceOnlyMarkScreenState(screenName: string, stateName?: strin
       : DEFAULT_SCREEN_STATE;
   const title = `ScreenState: ${screen} | ${state}`;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { test } = pwRequire('@playwright/test') as any;
+  const { test } = pwRequire(runtimeModuleName) as any;
   await test.step(title, async () => {
     // eslint-disable-next-line no-console
     console.log(`reached ${screen} | ${state}`);
@@ -145,6 +159,6 @@ async function runTraceOnlyMarkScreenState(screenName: string, stateName?: strin
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { test: rootTest } = pwRequire('@playwright/test') as any;
+const { test: rootTest } = pwRequire(runtimeModuleName) as any;
 
 installTrueCoverage(rootTest);

@@ -1,7 +1,7 @@
 {
   "name": "@testchimp/playwright",
-  "version": "0.1.25",
-  "description": "Playwright reporter for TestChimp test execution tracking and coverage reporting",
+  "version": "0.1.26",
+  "description": "Playwright/Mobilewright reporter and runtime for TestChimp tracking and coverage reporting",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "publishConfig": {
@@ -33,7 +33,13 @@
     "test": "npm run build && node --test test/*.test.js"
   },
   "peerDependencies": {
-    "@playwright/test": ">=1.40.0"
+    "@playwright/test": ">=1.40.0",
+    "mobilewright": ">=0.0.33"
+  },
+  "peerDependenciesMeta": {
+    "mobilewright": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@axe-core/playwright": "^4.11.0",
@@ -52,6 +58,7 @@
   "keywords": [
     "testchimp",
     "playwright",
+    "mobilewright",
     "reporter",
     "test-automation",
     "coverage"

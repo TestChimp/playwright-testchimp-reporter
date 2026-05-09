@@ -15,7 +15,6 @@
 import axios, { AxiosInstance } from 'axios';
 import FormData from 'form-data';
 import { createHash } from 'crypto';
-import type { Page } from '@playwright/test';
 import { createRequire } from 'module';
 import path from 'path';
 import {
@@ -60,6 +59,7 @@ import {
 import { cleanHtml } from './clean-html';
 import { compactAxeResultsForUpload } from './axe-compact';
 import { registerExploreChimpAnalyticsStepScreenState } from './analytics-step-screen-state-registry';
+import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from '../project-type';
 
 export { DataSourceEnum };
 export type {
@@ -92,12 +92,21 @@ export type {
 } from './agents-explorechimp-json';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
+const fixtureKey = getFixtureKey();
 
 const K_META = '__testchimpExploreChimpMeta';
 const K_BUF = '__testchimpExploreChimpBuffers';
 const K_HOOKED = '__testchimpExploreChimpHooked';
 
-type PageAugmented = Page & Record<string, unknown>;
+type ExploreChimpTarget = Record<string, unknown> & {
+  on?: (event: string, cb: (...args: any[]) => void) => void;
+  screenshot?: (opts?: Record<string, unknown>) => Promise<Buffer>;
+  waitForLoadState?: (state: string, opts?: Record<string, unknown>) => Promise<void>;
+  content?: () => Promise<string>;
+  addInitScript?: (...args: any[]) => Promise<void>;
+  evaluate?: <T, A = unknown>(fn: (arg: A) => T, arg: A) => Promise<T>;
+};
+type PageAugmented = ExploreChimpTarget & Record<string, unknown>;
 
 export interface ExploreChimpPageMeta {
   journeyExecutionId: string;
@@ -273,7 +282,7 @@ function hashNetworkBatch(rows: NetworkRow[]): string {
   return createHash('sha256').update(key).digest('hex');
 }
 
-function getBuffers(page: Page): BufferState {
+function getBuffers(page: ExploreChimpTarget): BufferState {
   const p = page as PageAugmented;
   if (!p[K_BUF]) {
     p[K_BUF] = {
@@ -287,7 +296,7 @@ function getBuffers(page: Page): BufferState {
 }
 
 /** Clears console/network buffers, resets in-page perf buffers (watcher.resetMetrics), advances metrics interval. */
-async function resetExploreChimpIntervalBuffers(page: Page): Promise<void> {
+async function resetExploreChimpIntervalBuffers(page: ExploreChimpTarget): Promise<void> {
   const b = getBuffers(page);
   b.consoleRows = [];
   b.networkRows = [];
@@ -296,27 +305,31 @@ async function resetExploreChimpIntervalBuffers(page: Page): Promise<void> {
 }
 
 export function attachExploreChimpInstrumentation(
-  page: Page,
+  page: ExploreChimpTarget,
   opts: { recordNetwork: boolean; networkRegex: RegExp | null }
 ): void {
   const p = page as PageAugmented;
   if (p[K_HOOKED]) return;
   p[K_HOOKED] = true;
 
-  const reqStarts = new WeakMap<import('@playwright/test').Request, number>();
+  if (typeof page.on !== 'function') {
+    return;
+  }
+
+  const reqStarts = new WeakMap<object, number>();
 
   if (opts.recordNetwork && opts.networkRegex) {
     const networkRegex = opts.networkRegex;
     page.on('request', (req) => {
-      reqStarts.set(req, Date.now());
+      reqStarts.set(req as object, Date.now());
     });
 
     page.on('response', async (response) => {
       try {
-        const req = response.request();
+        const req = (response as { request: () => any }).request();
         const url = req.url();
         if (!networkRegex.test(url)) return;
-        const start = reqStarts.get(req) ?? Date.now();
+        const start = reqStarts.get(req as object) ?? Date.now();
         const rt = Math.max(0, Date.now() - start);
         const reqHeaders = headersToRecord(req.headers());
         let resHeaders: Record<string, string> = {};
@@ -365,9 +378,15 @@ export function attachExploreChimpInstrumentation(
 export function applyExploreChimpPageFixture(test: any): any {
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    page: async ({ page }: { page: Page }, use: any, testInfo: any) => {
+    [fixtureKey]: async (fixtures: Record<string, unknown>, use: any, testInfo: any) => {
+      const target = fixtures[fixtureKey] as ExploreChimpTarget | undefined;
+      if (!target) {
+        throw new Error(
+          `[ExploreChimp] Missing "${fixtureKey}" fixture. Check TESTCHIMP_PROJECT_TYPE and runner fixture wiring.`
+        );
+      }
       if (!isExploreChimpEnabled()) {
-        await use(page);
+        await use(target);
         return;
       }
       const project = testInfo.project as { rootDir?: string };
@@ -422,7 +441,7 @@ export function applyExploreChimpPageFixture(test: any): any {
         testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
         projectRootDir,
       };
-      (page as PageAugmented)[K_META] = meta;
+      (target as PageAugmented)[K_META] = meta;
 
       const sources = parseExploreChimpSources();
       const wantNetwork = sources.has('NETWORK');
@@ -432,20 +451,23 @@ export function applyExploreChimpPageFixture(test: any): any {
           '[ExploreChimp] NETWORK listed in EXPLORECHIMP_SOURCES_TO_ANALYZE but EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE is missing — network capture disabled'
         );
       }
-      attachExploreChimpInstrumentation(page, {
+      attachExploreChimpInstrumentation(target, {
         recordNetwork: !!(wantNetwork && regex),
         networkRegex: regex,
       });
-      if (sources.has('METRICS')) {
-        await installExploreChimpPerfMetricsObservers(page, parseExploreChimpLongTaskThresholdMs());
+      if (sources.has('METRICS') && !isMobileProjectType()) {
+        await installExploreChimpPerfMetricsObservers(target, parseExploreChimpLongTaskThresholdMs());
       }
 
-      await use(page);
+      await use(target);
     },
   });
 }
 
-function getMeta(page: Page): ExploreChimpPageMeta | undefined {
+// Backward-compatible export name for internal callers.
+export const applyExploreChimpFixture = applyExploreChimpPageFixture;
+
+function getMeta(page: ExploreChimpTarget): ExploreChimpPageMeta | undefined {
   return (page as PageAugmented)[K_META] as ExploreChimpPageMeta | undefined;
 }
 
@@ -453,10 +475,11 @@ function getMeta(page: Page): ExploreChimpPageMeta | undefined {
  * ExploreChimp path for screen markers; invoked by the `markScreenState` fixture (not directly from specs).
  */
 export async function runExploreChimpMarkScreenState(
-  page: Page,
+  page: unknown,
   screenName: string,
   stateName?: string
 ): Promise<void> {
+  const target = page as ExploreChimpTarget;
   const screen = String(screenName ?? '').trim();
   if (!screen) return;
 
@@ -465,10 +488,12 @@ export async function runExploreChimpMarkScreenState(
       ? String(stateName).trim()
       : 'default';
 
-  const { test } = pwRequire('@playwright/test') as { test: { step: (name: string, fn: () => Promise<void>) => Promise<void> } };
+  const { test } = pwRequire(getTestRuntimeModuleName()) as {
+    test: { step: (name: string, fn: () => Promise<void>) => Promise<void> };
+  };
 
   const sources = parseExploreChimpSources();
-  const meta = getMeta(page);
+  const meta = getMeta(target);
   const explorationId = readTestChimpBatchInvocationId(meta?.projectRootDir ?? process.cwd());
   const apiKey = process.env.TESTCHIMP_API_KEY?.trim() || '';
 
@@ -482,11 +507,13 @@ export async function runExploreChimpMarkScreenState(
   }
 
   await test.step(`ScreenState: ${screen} | ${state}`, async () => {
-    await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    if (typeof target.waitForLoadState === 'function') {
+      await target.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+    }
   });
 
   const client = createBackendClient();
-  const buffers = getBuffers(page);
+  const buffers = getBuffers(target);
   const prior = buffers.priorMarkedScreen;
   const current = { name: screen, state };
   /** Same resolution order as execution reports when reporter uses {@link getBranchName} in buildReport. */
@@ -550,11 +577,11 @@ export async function runExploreChimpMarkScreenState(
       }
     }
 
-    if (sources.has('METRICS')) {
+    if (sources.has('METRICS') && !isMobileProjectType()) {
       const metricsTitle = `Analyzing Metrics for Screen-state ${prior.name} | ${prior.state}`;
       let metricsPayload: MetricsPayload | null = null;
       try {
-        metricsPayload = await collectMetricsSince(page, buffers.metricsIntervalSinceMs);
+        metricsPayload = await collectMetricsSince(target, buffers.metricsIntervalSinceMs);
       } catch {
         metricsPayload = null;
       }
@@ -588,7 +615,11 @@ export async function runExploreChimpMarkScreenState(
     const shotTitle = `Analyzing Screenshot for Screen-state ${current.name} | ${current.state}`;
     registerExploreChimpAnalyticsStepScreenState(exploreChimpAnalyticsStepId(meta, shotTitle), current);
     await test.step(shotTitle, async () => {
-      const jpeg = await page.screenshot({ type: 'jpeg', quality: 60, fullPage: false });
+      if (typeof target.screenshot !== 'function') {
+        console.warn('[ExploreChimp] Fixture does not expose screenshot() — skipping screenshot analysis.');
+        return;
+      }
+      const jpeg = await target.screenshot({ type: 'jpeg', quality: 60, fullPage: false });
       const gcpPath = await uploadScreenshot(client, jpeg);
       await postAnalyze(client, {
         explorationId,
@@ -606,18 +637,23 @@ export async function runExploreChimpMarkScreenState(
     });
   }
 
-  if (sources.has('DOM')) {
+  if (sources.has('DOM') && !isMobileProjectType()) {
     const domTitle = `Analyzing DOM for Screen-state ${current.name} | ${current.state}`;
     registerExploreChimpAnalyticsStepScreenState(exploreChimpAnalyticsStepId(meta, domTitle), current);
     await test.step(domTitle, async () => {
       let html = '';
       try {
-        html = await page.content();
+        if (typeof target.content === 'function') {
+          html = await target.content();
+        }
       } catch {
         html = '';
       }
+      if (!html) {
+        return;
+      }
       const { default: AxeBuilder } = await import('@axe-core/playwright');
-      const axeResults = await new AxeBuilder({ page }).analyze();
+      const axeResults = await new AxeBuilder({ page: target as never }).analyze();
       const domMaxParsed = Number.parseInt(process.env.EXPLORECHIMP_DOM_MAX_CHARS?.trim() || '', 10);
       const domMax =
         Number.isFinite(domMaxParsed) && domMaxParsed > 0 ? domMaxParsed : 32000;
@@ -642,5 +678,5 @@ export async function runExploreChimpMarkScreenState(
   }
 
   buffers.priorMarkedScreen = current;
-  await resetExploreChimpIntervalBuffers(page);
+  await resetExploreChimpIntervalBuffers(target);
 }

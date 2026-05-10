@@ -7,29 +7,26 @@
  * The same `markScreenState` fixture records a runner `test.step` when ExploreChimp is off, and runs ExploreChimp analytics when it is on.
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
  * default `@playwright/test`, or `mobilewright` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
+ *
+ * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app.
  */
 
 import * as path from 'path';
 import { createRequire } from 'module';
-import {
-  derivePathsFromTestInfo,
-  deriveTestsFolder,
-  getBranchName,
-  readTestChimpBatchInvocationId,
-} from './utils';
+import { buildCiTestInfoJson } from './ci-test-info';
 import {
   applyExploreChimpFixture,
   runExploreChimpMarkScreenState,
   isExploreChimpEnabled,
 } from './explorechimp';
 import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from './project-type';
+import { attachMobileRumAutomationHooks } from './rum-automation-mobile';
 
 /** Resolve test runtime module from the consumer project (web: Playwright, mobile: Mobilewright). */
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 const fixtureKey = getFixtureKey();
 const mobileProject = isMobileProjectType();
 const runtimeModuleName = getTestRuntimeModuleName();
-let warnedTrueCoverageMobileSkip = false;
 
 /** Bound screen/state marker from the `markScreenState` Playwright fixture. */
 export type MarkScreenStateFixture = (screenName: string, stateName?: string) => Promise<void>;
@@ -85,33 +82,12 @@ export function installTrueCoverage(test: any): any {
   const withCi = mobileProject
     ? test
     : test.extend({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         page: async ({ page }: { page: any }, use: any, testInfo: any) => {
           const project = testInfo.project as { rootDir?: string };
           const projectRootDir = project.rootDir ?? process.cwd();
-          const testsFolder = deriveTestsFolder(projectRootDir);
-          const paths = derivePathsFromTestInfo(
-            testInfo as unknown as Parameters<typeof derivePathsFromTestInfo>[0],
-            testsFolder,
-            projectRootDir,
-            false
-          );
+          const jsonString = buildCiTestInfoJson(testInfo, projectRootDir);
 
-          const ciTestInfo: Record<string, unknown> = {
-            folderPath: paths.folderPath,
-            fileName: paths.fileName,
-            suitePath: paths.suitePath,
-            testName: paths.testName,
-          };
-          const branchName = getBranchName();
-          if (branchName) ciTestInfo.branchName = branchName;
-          const env = process.env.TESTCHIMP_ENV || process.env.TESTCHIMP_ENVIRONMENT;
-          if (env) ciTestInfo.environment = String(env).trim();
-          const release = process.env.TESTCHIMP_RELEASE || process.env.TESTCHIMP_RELEASE_NAME;
-          if (release) ciTestInfo.release = release;
-          const batchInvocationId = readTestChimpBatchInvocationId(projectRootDir);
-          if (batchInvocationId) ciTestInfo.batchInvocationId = batchInvocationId;
-
-          const jsonString = JSON.stringify(ciTestInfo);
           await page.addInitScript(
             (info: string) => {
               (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
@@ -131,18 +107,15 @@ export function installTrueCoverage(test: any): any {
         },
       });
 
-  if (mobileProject && !warnedTrueCoverageMobileSkip) {
-    // TrueCoverage CI metadata injection currently relies on Playwright page semantics.
-    // eslint-disable-next-line no-console
-    console.warn('[TestChimp] TrueCoverage instrumentation is web-only for now; skipping on mobile.');
-    warnedTrueCoverageMobileSkip = true;
-  }
-
   const withMark = addMarkScreenStateFixture(withCi);
-  if (!isExploreChimpEnabled()) {
-    return withMark;
+  let chain: typeof withMark = withMark;
+  if (isExploreChimpEnabled()) {
+    chain = applyExploreChimpFixture(withMark);
   }
-  return applyExploreChimpFixture(withMark);
+  if (mobileProject) {
+    chain = attachMobileRumAutomationHooks(chain);
+  }
+  return chain;
 }
 
 /** Same behavior as {@link installTrueCoverage} — umbrella name for TrueCoverage + ExploreChimp (via env). */

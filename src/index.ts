@@ -28,6 +28,7 @@
  * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
  * Fixture/runtime switching: default web mode uses `page`; set `TESTCHIMP_PROJECT_TYPE=ios|android`
  * (case-insensitive) to switch runtime fixture wiring to `screen`.
+ * Mobile TrueCoverage: `TESTCHIMP_PROJECT_TYPE=ios|android` + TestChimpRum URL handler; see README.
  * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module. Set **`TESTCHIMP_BRANCH_NAME`** (or `TESTCHIMP_BRANCH`) locally so analyze requests send `branchName` and the server can persist `branch_id`.
  */
 
@@ -35,6 +36,12 @@ export { TestChimpReporter } from './testchimp-reporter';
 export { TestChimpApiClient } from './api-client';
 export * from './types';
 export * from './utils';
+export { buildCiTestInfoJson, buildCiTestInfoObject, type CiTestInfo, type TestInfoForCi } from './ci-test-info';
+export {
+  attachMobileRumAutomationHooks,
+  buildAutomationSetOpenUrl,
+  getMobileRumAutomationUrls,
+} from './rum-automation-mobile';
 /** ExploreChimp / agents.proto JSON mirrors (camelCase). */
 export type * from './explorechimp/agents-explorechimp-json';
 export { DataSourceEnum } from './explorechimp/agents-explorechimp-json';

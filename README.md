@@ -21,9 +21,9 @@ You run tests with the normal Playwright CLI or via your CI (GitHub Actions etc.
 
 The reporter plugin pipes AI-native step calls (`ai.act`, `ai.verify`, etc.) via TestChimp backends, so that those steps work seamlessly—wherever you run your tests (local, CI, or any environment).
 
-### 3. Augment @testchimp/rum-js events for TrueCoverage (test ↔ real user alignment)
+### 3. Augment RUM events for TrueCoverage (test ↔ real user alignment)
 
-[@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) emits real user events from the browser to TestChimp. When the same app is exercised **in CI by Playwright**, you want those events to be tagged with **which test** produced them so TestChimp can:
+[@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) (web), **TestChimpRum** (iOS — Swift package `testchimp-rum-ios`), and **TestChimpRum** (Android — `io.testchimp:rum-android` / `testchimp-rum-android`) emit real user events to TestChimp. When the same app is exercised **in CI** (Playwright or Mobilewright), you want those events tagged with **which test** produced them so TestChimp can:
 
 - Align test runs with real user sessions (TrueCoverage)
 - See which tests generated which events
@@ -72,17 +72,25 @@ export default defineConfig({
 });
 ```
 
-For TrueCoverage, add the following import in your tests:
+For TrueCoverage, **wrap and re-export** `test` from your fixtures entry (recommended):
 
-```
-import '@testchimp/playwright/runtime';
+```ts
+import { test as base } from '@playwright/test'; // or '@mobilewright/test'
+import { installTestChimp } from '@testchimp/playwright/runtime';
+export const test = installTestChimp(base);
 ```
 
-For mobile projects, also set:
+A side-effect-only `import '@testchimp/playwright/runtime'` does not apply extended fixtures or mobile hooks; the returned `TestType` from `installTestChimp` must be what your specs import.
+
+**Web:** the runtime injects `__TC_CI_TEST_INFO` on the `page` fixture for `@testchimp/rum-js`.
+
+**Mobile (iOS/Android):** set `TESTCHIMP_PROJECT_TYPE=ios` or `android`. The runtime always registers `beforeEach`/`afterEach` hooks that call `device.openUrl` to push CI metadata into the app. Integrate **TestChimpRum** for that platform (see `testchimp-rum-ios` / `testchimp-rum-android` READMEs): URL scheme / intent filter for `testchimp-rum://truecoverage/...`.
 
 ```bash
 export TESTCHIMP_PROJECT_TYPE=ios  # or android
 ```
+
+Optional URL overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL` (defaults match the native SDKs).
 
 ### 2. Environment variables
 
@@ -95,7 +103,9 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
-| `TESTCHIMP_PROJECT_TYPE` | No | Fixture/runtime switch: `web` (default) or mobile values (`ios`/`android`). |
+| `TESTCHIMP_PROJECT_TYPE` | No | Fixture/runtime switch: `web` (default) or mobile (`ios`/`android`). Mobile mode always pushes CI JSON via `device.openUrl` (TrueCoverage). |
+| `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX` | No | Override set-URL prefix (default `testchimp-rum://truecoverage/v1/set?p=` + base64url JSON). |
+| `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL` | No | Override clear URL (default `testchimp-rum://truecoverage/v1/clear`). |
 
 If `TESTCHIMP_API_KEY` is missing, the reporter logs a warning and disables reporting (no request is sent).
 
@@ -153,9 +163,10 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 - **Subpath**: `@testchimp/playwright/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
-- **Subpath**: `@testchimp/playwright/runtime` — side-effect import only; registers `test.beforeEach` to inject CI test info.
-  - TrueCoverage CI metadata injection is currently web-only (`page` fixture).
-  - When `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, TrueCoverage injection is skipped and runtime fixtures focus on mobile marker behavior.
+- **Subpath**: `@testchimp/playwright/runtime` — use `installTestChimp(test)` on your runner’s `test` object (see Quick start).
+  - **Web:** extends `page` to set `__TC_CI_TEST_INFO` for `@testchimp/rum-js`.
+  - **Mobile:** when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, registers hooks that call `device.openUrl` for the iOS Swift SDK and Android Kotlin SDK (same URL contract).
+- **Named**: `buildCiTestInfoJson`, `attachMobileRumAutomationHooks`, etc., for advanced wiring.
 
 ---
 
@@ -171,7 +182,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
 
 - **RUM events not linked to tests**  
-  Ensure you `import '@testchimp/playwright/runtime'` in the test files.
+  Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. On mobile, set `TESTCHIMP_PROJECT_TYPE` and handle `testchimp-rum://` URLs in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationIntent` on Android).
 
 - **Verbose logging**  
   Set `verbose: true` in reporter options or use it during setup to see which steps are captured and when reports are sent.

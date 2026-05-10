@@ -19,10 +19,8 @@ export function getFixtureKey(): FixtureKey {
 }
 
 export function getTestRuntimeModuleName(): string {
-  if (!isMobileProjectType()) {
-    return DEFAULT_WEB_RUNTIME_MODULE;
-  }
-  const configured = process.env.TESTCHIMP_MOBILE_TEST_MODULE?.trim();
-  return configured || DEFAULT_MOBILE_RUNTIME_MODULE;
+  return isMobileProjectType()
+    ? DEFAULT_MOBILE_RUNTIME_MODULE
+    : DEFAULT_WEB_RUNTIME_MODULE;
 }
 

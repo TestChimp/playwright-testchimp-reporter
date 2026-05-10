@@ -60,19 +60,3 @@ test('project type "mobile" is not treated as a supported mobile project type', 
   });
 });
 
-test('mobile runtime module can be overridden', () => {
-  const prevType = process.env.TESTCHIMP_PROJECT_TYPE;
-  const prevMod = process.env.TESTCHIMP_MOBILE_TEST_MODULE;
-  process.env.TESTCHIMP_PROJECT_TYPE = 'ios';
-  process.env.TESTCHIMP_MOBILE_TEST_MODULE = '@custom/mobile-test';
-  try {
-    const { getTestRuntimeModuleName } = require('../dist/project-type');
-    assert.equal(getTestRuntimeModuleName(), '@custom/mobile-test');
-  } finally {
-    if (prevType === undefined) delete process.env.TESTCHIMP_PROJECT_TYPE;
-    else process.env.TESTCHIMP_PROJECT_TYPE = prevType;
-    if (prevMod === undefined) delete process.env.TESTCHIMP_MOBILE_TEST_MODULE;
-    else process.env.TESTCHIMP_MOBILE_TEST_MODULE = prevMod;
-  }
-});
-

@@ -119,6 +119,16 @@ export class TestChimpReporter implements Reporter {
         ? envMode
         : (options.executionMode || 'ci');
 
+    const exploreChImpReporterFromEnv = (): boolean => {
+      const a = getEnvVar('TESTCHIMP_EXPLORECHIMP_REPORTER_ENABLED', '')?.trim().toLowerCase();
+      const b = getEnvVar('explorechimp_enabled', '')?.trim().toLowerCase();
+      return a === 'true' || a === '1' || a === 'yes' || b === 'true' || b === '1' || b === 'yes';
+    };
+    const exploreChImpReporterEnabled =
+      options.exploreChImpReporterEnabled !== undefined
+        ? Boolean(options.exploreChImpReporterEnabled)
+        : exploreChImpReporterFromEnv();
+
     this.options = {
       apiKey: options.apiKey || '',
       backendUrl: options.backendUrl || '',
@@ -131,8 +141,17 @@ export class TestChimpReporter implements Reporter {
       reportOnlyFinalAttempt: options.reportOnlyFinalAttempt ?? true,
       captureScreenshots: options.captureScreenshots ?? true,
       verbose: options.verbose ?? false,
+      exploreChImpReporterEnabled,
       executionMode
     };
+  }
+
+  /** ExploreChimp journey/exploration POSTs — only when explicitly opted in and EC runtime env is on. */
+  private shouldPostExploreChimpJourneyApis(): boolean {
+    if (!this.options.exploreChImpReporterEnabled) {
+      return false;
+    }
+    return isExploreChimpEnabled();
   }
 
   onBegin(config: FullConfig, suite: Suite): void {
@@ -610,7 +629,7 @@ export class TestChimpReporter implements Reporter {
     fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H2',location:'testchimp-reporter.ts:onEnd',message:'onEnd_after_drain',data:{pendingNow:this.countTotalPendingOperations(),inFlightFinalizations:this.inFlightPlatformFinalizations.size,status:result.status},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
     const suppressExplorationEnd = getEnvVar('TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END', '') === 'true';
-    if (this.isEnabled && this.apiClient && isExploreChimpEnabled()) {
+    if (this.isEnabled && this.apiClient && this.shouldPostExploreChimpJourneyApis()) {
       const explorationId = this.batchInvocationId?.trim();
       if (explorationId && !suppressExplorationEnd) {
         try {
@@ -713,7 +732,7 @@ export class TestChimpReporter implements Reporter {
     result: TestResult,
     paths: ReturnType<typeof derivePaths>
   ): string | undefined {
-    if (!isExploreChimpEnabled()) {
+    if (!this.shouldPostExploreChimpJourneyApis()) {
       return undefined;
     }
     const explorationId = this.batchInvocationId?.trim();
@@ -739,7 +758,7 @@ export class TestChimpReporter implements Reporter {
     execution: TestExecutionState,
     pathsInput?: ReturnType<typeof derivePaths>
   ): Promise<void> {
-    if (!this.apiClient || !isExploreChimpEnabled()) {
+    if (!this.apiClient || !this.shouldPostExploreChimpJourneyApis()) {
       return;
     }
     const explorationId = this.batchInvocationId?.trim();

@@ -30,6 +30,7 @@
  * (case-insensitive) to switch runtime fixture wiring to `screen`.
  * Mobile TrueCoverage: `TESTCHIMP_PROJECT_TYPE=ios|android` + TestChimpRum URL handler; see README.
  * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module. Set **`TESTCHIMP_BRANCH_NAME`** (or `TESTCHIMP_BRANCH`) locally so analyze requests send `branchName` and the server can persist `branch_id`.
+ * ExploreChimp **reporter** HTTP (`journey_execution_end` / `exploration_end`) is opt-in: set reporter option `exploreChImpReporterEnabled: true`, or env `explorechimp_enabled=true` / `TESTCHIMP_EXPLORECHIMP_REPORTER_ENABLED=true` (when the option is omitted), **and** `EXPLORECHIMP_ENABLED=true` for page instrumentation.
  */
 
 export { TestChimpReporter } from './testchimp-reporter';

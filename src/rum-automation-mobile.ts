@@ -86,8 +86,7 @@ let warnedMobileAutomationOnce = false;
 export function attachMobileRumAutomationHooks(testType: any): any {
   const { setUrlPrefix, clearUrl } = getMobileRumAutomationUrls();
 
-  testType.beforeEach(async (fixtures: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
-    const { device, bundleId } = fixtures;
+  testType.beforeEach(async ({ device, bundleId }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
     const bid = typeof bundleId === 'string' && bundleId.trim() !== '' ? bundleId.trim() : undefined;
     if (bid != null && typeof device.launchApp === 'function') {
       try {

@@ -13,6 +13,13 @@ test('buildAutomationSetOpenUrl encodes base64url payload', () => {
   assert.equal(decoded, json);
 });
 
+function decodeSetPayload(url) {
+  const prefix = 'testchimp-rum://truecoverage/v1/set?p=';
+  assert.ok(url.startsWith(prefix));
+  const p = url.slice(prefix.length);
+  return JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+}
+
 test('attachMobileRumAutomationHooks always registers beforeEach/afterEach', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
 
@@ -57,4 +64,125 @@ test('attachMobileRumAutomationHooks always registers beforeEach/afterEach', asy
   await hooks.afterEach({ device });
   assert.equal(calls.length, 2);
   assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/clear');
+});
+
+test('beforeEach calls launchApp before openUrl when bundleId and launchApp exist', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  const calls = [];
+  const device = {
+    launchApp: async (bid) => {
+      calls.push({ kind: 'launch', bid });
+    },
+    openUrl: async (u) => {
+      calls.push({ kind: 'openUrl', u });
+    },
+  };
+  const hooks = { beforeEach: null, afterEach: null };
+  attachMobileRumAutomationHooks({
+    beforeEach(fn) {
+      hooks.beforeEach = fn;
+      return this;
+    },
+    afterEach(fn) {
+      hooks.afterEach = fn;
+      return this;
+    },
+  });
+
+  const testInfo = {
+    file: 'tests/foo.spec.ts',
+    title: 't',
+    titlePath: () => ['', 'foo.spec.ts', 't'],
+    project: { name: 'mobile', rootDir: '/tmp/r' },
+    retry: 0,
+    workerIndex: 0,
+    testId: 'id1',
+  };
+
+  await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], { kind: 'launch', bid: 'com.example.app' });
+  assert.equal(calls[1].kind, 'openUrl');
+});
+
+test('successive tests get distinct set payloads from their testInfo', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  const calls = [];
+  const device = {
+    openUrl: async (u) => {
+      calls.push(u);
+    },
+  };
+  const hooks = { beforeEach: null, afterEach: null };
+  attachMobileRumAutomationHooks({
+    beforeEach(fn) {
+      hooks.beforeEach = fn;
+      return this;
+    },
+    afterEach(fn) {
+      hooks.afterEach = fn;
+      return this;
+    },
+  });
+
+  const base = {
+    file: 'tests/foo.spec.ts',
+    project: { name: 'mobile', rootDir: '/tmp/r' },
+    retry: 0,
+    workerIndex: 0,
+    testId: 'same',
+  };
+
+  await hooks.beforeEach(
+    { device },
+    { ...base, title: 'first', titlePath: () => ['', 'foo.spec.ts', 'first'] }
+  );
+  await hooks.afterEach({ device });
+  await hooks.beforeEach(
+    { device },
+    { ...base, title: 'second', titlePath: () => ['', 'foo.spec.ts', 'second'] }
+  );
+
+  const setUrls = calls.filter((u) => u.includes('/set?p='));
+  assert.equal(setUrls.length, 2);
+  const p1 = decodeSetPayload(setUrls[0]);
+  const p2 = decodeSetPayload(setUrls[1]);
+  assert.notEqual(JSON.stringify(p1), JSON.stringify(p2));
+  assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/clear');
+});
+
+test('openUrl set retries until success', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  let openCount = 0;
+  const device = {
+    openUrl: async (u) => {
+      openCount += 1;
+      if (u.includes('/set?p=') && openCount < 3) {
+        throw new Error('transient');
+      }
+    },
+  };
+  const hooks = { beforeEach: null, afterEach: null };
+  attachMobileRumAutomationHooks({
+    beforeEach(fn) {
+      hooks.beforeEach = fn;
+      return this;
+    },
+    afterEach() {
+      return this;
+    },
+  });
+
+  const testInfo = {
+    file: 'tests/foo.spec.ts',
+    title: 't',
+    titlePath: () => ['', 'foo.spec.ts', 't'],
+    project: { name: 'mobile', rootDir: '/tmp/r' },
+    retry: 0,
+    workerIndex: 0,
+    testId: 'x',
+  };
+
+  await hooks.beforeEach({ device }, testInfo);
+  assert.equal(openCount, 3);
 });

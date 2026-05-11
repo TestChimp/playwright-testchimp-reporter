@@ -6,7 +6,7 @@
  * Screen/state markers: `test('…', async ({ markScreenState }) => { await markScreenState('Screen', 'state'); })`.
  * The same `markScreenState` fixture records a runner `test.step` when ExploreChimp is off, and runs ExploreChimp analytics when it is on.
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
- * default `@playwright/test`, or `mobilewright` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
+ * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  *
  * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app.
  */

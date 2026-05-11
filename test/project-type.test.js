@@ -42,7 +42,7 @@ test('ios/android values are case-insensitive and map to mobile fixture/runtime'
       } = require('../dist/project-type');
       assert.equal(isMobileProjectType(), true);
       assert.equal(getFixtureKey(), 'screen');
-      assert.equal(getTestRuntimeModuleName(), 'mobilewright');
+      assert.equal(getTestRuntimeModuleName(), '@mobilewright/test');
     });
   }
 });

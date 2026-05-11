@@ -23,7 +23,7 @@ The reporter plugin pipes AI-native step calls (`ai.act`, `ai.verify`, etc.) via
 
 ### 3. Augment RUM events for TrueCoverage (test ↔ real user alignment)
 
-[@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) (web), **TestChimpRum** (iOS — Swift package `testchimp-rum-ios`), and **TestChimpRum** (Android — `io.testchimp:rum-android` / `testchimp-rum-android`) emit real user events to TestChimp. When the same app is exercised **in CI** (Playwright or Mobilewright), you want those events tagged with **which test** produced them so TestChimp can:
+[@testchimp/rum-js](https://www.npmjs.com/package/@testchimp/rum-js) (web), **TestChimpRum** (iOS — Swift package [testchimp-rum-ios](https://github.com/testchimphq/testchimp-rum-ios)), and **TestChimpRum** (Android — [testchimp-rum-android](https://github.com/testchimphq/testchimp-rum-android), typically via JitPack: `com.github.testchimphq:testchimp-rum-android:<tag>` per [JitPack](https://jitpack.io/#testchimphq/testchimp-rum-android)) emit real user events to TestChimp. When the same app is exercised **in CI** (Playwright or Mobilewright), you want those events tagged with **which test** produced them so TestChimp can:
 
 - Align test runs with real user sessions (TrueCoverage)
 - See which tests generated which events

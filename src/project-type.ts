@@ -2,7 +2,8 @@ export type FixtureKey = 'page' | 'screen';
 
 const MOBILE_TYPES = new Set(['ios', 'android']);
 const DEFAULT_WEB_RUNTIME_MODULE = '@playwright/test';
-const DEFAULT_MOBILE_RUNTIME_MODULE = 'mobilewright';
+/** Mobilewright exposes `test` / `expect` from `@mobilewright/test`, not the `mobilewright` CLI package. */
+const DEFAULT_MOBILE_RUNTIME_MODULE = '@mobilewright/test';
 
 function normalizedProjectType(): string {
   return String(process.env.TESTCHIMP_PROJECT_TYPE ?? '')

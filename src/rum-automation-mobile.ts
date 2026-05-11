@@ -8,20 +8,24 @@ const MAX_OPEN_URL_CHARS = 8000;
 
 const SET_OPEN_URL_MAX_ATTEMPTS = 3;
 const SET_OPEN_URL_RETRY_DELAY_MS = 400;
+const SET_AFTER_LAUNCH_REPEAT_COUNT = 2;
+const SET_AFTER_LAUNCH_REPEAT_DELAY_MS = 300;
 
 export interface MobileRumAutomationUrls {
   setUrlPrefix: string;
   clearUrl: string;
 }
 
-/** Mobilewright worker fixtures used by TrueCoverage hooks. */
+/** Mobilewright worker fixtures used by TrueCoverage hooks (`device` absent in non-mobile projects, e.g. setup). */
 type MobileDeviceWorkerFixtures = {
-  device: {
+  device?: {
     openUrl: (url: string) => Promise<void>;
     launchApp?: (bundleId: string) => Promise<void>;
-  };
+  } | null;
   bundleId?: string;
 };
+
+type MobileDeviceNonNull = NonNullable<MobileDeviceWorkerFixtures['device']>;
 
 /**
  * URL prefix and clear URL for Mobilewright TrueCoverage (`device.openUrl`).
@@ -49,10 +53,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function openUrlSetWithRetries(
-  device: MobileDeviceWorkerFixtures['device'],
-  url: string
-): Promise<void> {
+async function openUrlSetWithRetries(device: MobileDeviceNonNull, url: string): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < SET_OPEN_URL_MAX_ATTEMPTS; attempt++) {
     try {
@@ -72,6 +73,20 @@ async function openUrlSetWithRetries(
   );
 }
 
+async function pushSetUrlWithPostLaunchRepeat(
+  device: MobileDeviceNonNull,
+  url: string,
+  repeats: number
+): Promise<void> {
+  const total = Math.max(1, repeats);
+  for (let i = 0; i < total; i++) {
+    await openUrlSetWithRetries(device, url);
+    if (i < total - 1) {
+      await sleep(SET_AFTER_LAUNCH_REPEAT_DELAY_MS);
+    }
+  }
+}
+
 let warnedMobileAutomationOnce = false;
 
 /**
@@ -87,10 +102,22 @@ export function attachMobileRumAutomationHooks(testType: any): any {
   const { setUrlPrefix, clearUrl } = getMobileRumAutomationUrls();
 
   testType.beforeEach(async ({ device, bundleId }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
+    if (!device || typeof device.openUrl !== 'function') {
+      return;
+    }
+    try {
+      await device.openUrl(clearUrl);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(`[TestChimp] TrueCoverage device.openUrl(clear-before-set) failed (non-fatal): ${msg}`);
+    }
+    let launchedApp = false;
     const bid = typeof bundleId === 'string' && bundleId.trim() !== '' ? bundleId.trim() : undefined;
     if (bid != null && typeof device.launchApp === 'function') {
       try {
         await device.launchApp(bid);
+        launchedApp = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // eslint-disable-next-line no-console
@@ -110,20 +137,9 @@ export function attachMobileRumAutomationHooks(testType: any): any {
       }
       return;
     }
-    await openUrlSetWithRetries(device, built);
+    const repeats = launchedApp ? SET_AFTER_LAUNCH_REPEAT_COUNT : 1;
+    await pushSetUrlWithPostLaunchRepeat(device, built, repeats);
   });
-
-  testType.afterEach(
-    async ({ device }: { device: { openUrl: (url: string) => Promise<void> } }) => {
-      try {
-        await device.openUrl(clearUrl);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // eslint-disable-next-line no-console
-        console.warn(`[TestChimp] TrueCoverage device.openUrl(clear) failed (non-fatal): ${msg}`);
-      }
-    }
-  );
 
   return testType;
 }

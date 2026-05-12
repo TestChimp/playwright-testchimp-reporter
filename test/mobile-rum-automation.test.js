@@ -274,6 +274,51 @@ test('beforeEach sends set URL four times when app launch succeeds', async () =>
   assert.equal(setUrls[0], setUrls[3]);
 });
 
+test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever', async () => {
+  process.env.TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS = '50';
+  try {
+    const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+    const calls = [];
+    const device = {
+      openUrl: async () => {
+        calls.push('hang');
+        await new Promise(() => {
+          /* never resolves */
+        });
+      },
+    };
+    const hooks = { beforeEach: null, afterEach: null };
+    attachMobileRumAutomationHooks({
+      beforeEach(fn) {
+        hooks.beforeEach = fn;
+        return this;
+      },
+      afterEach(fn) {
+        hooks.afterEach = fn;
+        return this;
+      },
+    });
+
+    const testInfo = {
+      file: 'tests/foo.spec.ts',
+      title: 't',
+      titlePath: () => ['', 'foo.spec.ts', 't'],
+      project: { name: 'mobile', rootDir: '/tmp/r' },
+      retry: 0,
+      workerIndex: 0,
+      testId: 'timeout',
+    };
+
+    const t0 = Date.now();
+    await hooks.beforeEach({ device }, testInfo);
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 8000, `expected bounded hook time, got ${elapsed}ms`);
+    assert.ok(calls.length >= 3, 'should retry hung openUrl');
+  } finally {
+    delete process.env.TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS;
+  }
+});
+
 test('beforeEach no-op when device is missing (e.g. setup project)', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
   const hooks = { beforeEach: null, afterEach: null };

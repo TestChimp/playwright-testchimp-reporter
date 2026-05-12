@@ -22,6 +22,29 @@ function resolvePostSetSettleMs(): number {
   return Math.max(0, Math.min(500, n));
 }
 
+/** Per-call cap for `device.openUrl` / `device.launchApp` so a wedged driver does not burn the whole test timeout. */
+function resolveOpenUrlTimeoutMs(): number {
+  const raw = process.env.TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 25_000;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return 25_000;
+  return Math.max(100, Math.min(120_000, n));
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, operation: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${operation} timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export interface MobileRumAutomationUrls {
   setUrlPrefix: string;
   clearUrl: string;
@@ -42,7 +65,7 @@ type MobileDeviceNonNull = NonNullable<MobileDeviceWorkerFixtures['device']>;
 /**
  * URL prefix and clear URL for Mobilewright TrueCoverage (`device.openUrl`).
  * Optional overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL`,
- * `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`.
+ * `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`, `TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS` (per `openUrl`/`launchApp` call, default 25000, clamp 100–120000).
  */
 export function getMobileRumAutomationUrls(): MobileRumAutomationUrls {
   return {
@@ -67,11 +90,16 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+async function openUrlOnce(device: MobileDeviceNonNull, url: string): Promise<void> {
+  const ms = resolveOpenUrlTimeoutMs();
+  await withTimeout(device.openUrl(url), ms, 'TrueCoverage device.openUrl');
+}
+
 async function openUrlAutomationWithRetries(device: MobileDeviceNonNull, url: string): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < SET_OPEN_URL_MAX_ATTEMPTS; attempt++) {
     try {
-      await device.openUrl(url);
+      await openUrlOnce(device, url);
       return;
     } catch (err) {
       lastErr = err;
@@ -142,18 +170,13 @@ export function attachMobileRumAutomationHooks(testType: any): any {
     if (!device || typeof device.openUrl !== 'function') {
       return;
     }
-    try {
-      await device.openUrl(clearUrl);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
-      console.warn(`[TestChimp] TrueCoverage device.openUrl(clear-before-set) failed (non-fatal): ${msg}`);
-    }
+    await openUrlAutomationWithRetries(device, clearUrl);
     let launchedApp = false;
     const bid = typeof bundleId === 'string' && bundleId.trim() !== '' ? bundleId.trim() : undefined;
     if (bid != null && typeof device.launchApp === 'function') {
       try {
-        await device.launchApp(bid);
+        const ms = resolveOpenUrlTimeoutMs();
+        await withTimeout(device.launchApp(bid), ms, 'TrueCoverage device.launchApp');
         launchedApp = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

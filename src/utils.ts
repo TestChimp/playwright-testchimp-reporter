@@ -349,6 +349,11 @@ export function getBranchName(): string | undefined {
 
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 
+/** Absolute path to the batch-invocation id file (same rules as {@link readTestChimpBatchInvocationId}). */
+export function getTestChimpBatchInvocationFilePath(projectRootDir: string = process.cwd()): string {
+  return process.env.TESTCHIMP_BATCH_ID_FILE || path.join(projectRootDir, BATCH_ID_FILENAME);
+}
+
 /**
  * Batch / exploration id used by TrueCoverage and ExploreChimp local runs.
  * Prefer env TESTCHIMP_BATCH_INVOCATION_ID, else `.testchimp-batch-invocation-id` under project root.
@@ -356,8 +361,7 @@ const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';
 export function readTestChimpBatchInvocationId(projectRootDir: string = process.cwd()): string | undefined {
   const fromEnv = process.env.TESTCHIMP_BATCH_INVOCATION_ID;
   if (fromEnv) return fromEnv.trim();
-  const filePath =
-    process.env.TESTCHIMP_BATCH_ID_FILE || path.join(projectRootDir, BATCH_ID_FILENAME);
+  const filePath = getTestChimpBatchInvocationFilePath(projectRootDir);
   try {
     const v = fs.readFileSync(filePath, 'utf8').trim();
     return v || undefined;

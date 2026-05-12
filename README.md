@@ -106,6 +106,7 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_PROJECT_TYPE` | No | Fixture/runtime switch: `web` (default) or mobile (`ios`/`android`). Mobile mode always pushes CI JSON via `device.openUrl` (TrueCoverage). |
 | `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX` | No | Override set-URL prefix (default `testchimp-rum://truecoverage/v1/set?p=` + base64url JSON). |
 | `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL` | No | Override clear URL (default `testchimp-rum://truecoverage/v1/clear`). |
+| `TESTCHIMP_RUM_TRANSPORT_RESYNC` | No | Mobile `screen` fixture: set to `0` to disable automatic TrueCoverage `v1/set` after likely WebSocket/mobilecli transport failures (default: enabled). |
 
 If `TESTCHIMP_API_KEY` is missing, the reporter logs a warning and disables reporting (no request is sent).
 
@@ -166,7 +167,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **Subpath**: `@testchimp/playwright/runtime` — use `installTestChimp(test)` on your runner’s `test` object (see Quick start).
   - **Web:** extends `page` to set `__TC_CI_TEST_INFO` for `@testchimp/rum-js`.
   - **Mobile:** when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, registers hooks that call `device.openUrl` for the iOS Swift SDK and Android Kotlin SDK (same URL contract).
-- **Named**: `buildCiTestInfoJson`, `attachMobileRumAutomationHooks`, etc., for advanced wiring.
+- **Named**: `buildCiTestInfoJson`, `attachMobileRumAutomationHooks`, `resyncTrueCoverageSetForCurrentTest`, `isLikelyMobileTransportFailure`, etc., for advanced wiring.
 
 ---
 
@@ -184,7 +185,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **RUM events not linked to tests / missing `ci_test_info` (mobile)**  
   Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. Set `TESTCHIMP_PROJECT_TYPE=android|ios` and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  
   **Android SDK:** use **testchimp-rum-android ≥ 0.1.7** (automation **`/v1/set`** on caller thread; **`/v1/flush`** drains buffered events when the runner opens that URL).  
-  **Runner:** **`@testchimp/playwright` ≥ 0.1.38** sends `set` bursts after `launchApp`, settle delay, **`afterEach` `set` + `v1/flush`** so short tests still upload RUM before the next test’s `clear`. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms) on slow devices. Optional URL overrides: **`TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`**. If **`device.openUrl`** wedges (mobilecli), set **`TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS`** (default **25000**, clamp **100–120000**) so hooks fail fast instead of consuming the full test timeout.
+  **Runner:** **`@testchimp/playwright` ≥ 0.1.39** sends `set` bursts after `launchApp`, settle delay, **`afterEach` `set` + `v1/flush`**, and **re-sends `set` after likely transport failures** on `screen` API calls (WebSocket **1006**, connection closed, etc.) so the next RUM emit can recover `ci_test_info`. Disable with **`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`**. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms) on slow devices. Optional URL overrides: **`TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`**. If **`device.openUrl`** wedges (mobilecli), set **`TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS`** (default **25000**, clamp **100–120000**) so hooks fail fast instead of consuming the full test timeout.
 
 - **RUM events not linked to tests (web)**  
   Same `installTestChimp` barrel; web uses `__TC_CI_TEST_INFO` on `page` for `@testchimp/rum-js`.

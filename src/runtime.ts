@@ -8,7 +8,7 @@
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
  * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  *
- * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. End-of-test `v1/flush` uploads buffered RUM before the next test's `clear`.
+ * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. End-of-test `v1/flush` uploads buffered RUM before the next test's `clear`. When the fixture key is `screen`, the `screen` object is proxied so likely WebSocket/mobilecli transport failures trigger an extra `v1/set` resync (disable with `TESTCHIMP_RUM_TRANSPORT_RESYNC=0`).
  */
 
 import * as path from 'path';
@@ -20,6 +20,7 @@ import {
   isExploreChimpEnabled,
 } from './explorechimp';
 import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from './project-type';
+import { attachMobileScreenTransportResync } from './mobile-screen-transport-resync';
 import { attachMobileRumAutomationHooks } from './rum-automation-mobile';
 
 /** Resolve test runtime module from the consumer project (web: Playwright, mobile: Mobilewright). */
@@ -114,6 +115,9 @@ export function installTrueCoverage(test: any): any {
   }
   if (mobileProject) {
     chain = attachMobileRumAutomationHooks(chain);
+    if (fixtureKey === 'screen') {
+      chain = attachMobileScreenTransportResync(chain);
+    }
   }
   return chain;
 }

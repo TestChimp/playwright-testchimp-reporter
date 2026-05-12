@@ -52,7 +52,7 @@ export interface MobileRumAutomationUrls {
 }
 
 /** Mobilewright worker fixtures used by TrueCoverage hooks (`device` absent in non-mobile projects, e.g. setup). */
-type MobileDeviceWorkerFixtures = {
+export type MobileDeviceWorkerFixtures = {
   device?: {
     openUrl: (url: string) => Promise<void>;
     launchApp?: (bundleId: string) => Promise<void>;
@@ -61,6 +61,32 @@ type MobileDeviceWorkerFixtures = {
 };
 
 type MobileDeviceNonNull = NonNullable<MobileDeviceWorkerFixtures['device']>;
+
+/** Disable automatic TrueCoverage SET after mobilecli/WebSocket transport errors (`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`). */
+export function transportResyncDisabled(): boolean {
+  return process.env.TESTCHIMP_RUM_TRANSPORT_RESYNC?.trim() === '0';
+}
+
+/**
+ * Heuristic: mobilecli / WebSocket abnormal close or connection drop (e.g. code 1006).
+ * Used to re-send TrueCoverage `SET` so the next RUM emit can carry `ci_test_info` again.
+ */
+export function isLikelyMobileTransportFailure(err: unknown): boolean {
+  if (transportResyncDisabled()) return false;
+  const m = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (m.length === 0) return false;
+  const needles = [
+    '1006',
+    'websocket',
+    'connection closed',
+    'econnreset',
+    'socket hang up',
+    'network connection lost',
+    'rpc',
+    'mobilecli',
+  ];
+  return needles.some((n) => m.includes(n));
+}
 
 /**
  * URL prefix and clear URL for Mobilewright TrueCoverage (`device.openUrl`).
@@ -154,6 +180,22 @@ async function pushTrueCoverageSetForCurrentTest(
 }
 
 /**
+ * Re-send a single TrueCoverage `v1/set` for the current test (e.g. after a mobilecli/WebSocket transport drop)
+ * so the next RUM emit can attach `ci_test_info` again.
+ */
+export async function resyncTrueCoverageSetForCurrentTest(
+  device: MobileDeviceWorkerFixtures['device'],
+  testInfo: TestInfoForCi
+): Promise<boolean> {
+  if (!device || typeof device.openUrl !== 'function') {
+    return false;
+  }
+  const d = device as MobileDeviceNonNull;
+  const { setUrlPrefix } = getMobileRumAutomationUrls();
+  return pushTrueCoverageSetForCurrentTest(d, testInfo, setUrlPrefix, 1);
+}
+
+/**
  * Register `beforeEach` / `afterEach` on the given Playwright `TestType` to push CI JSON into the app via
  * `device.openUrl` (mobilecli `device.url`). Used when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`.
  *
@@ -198,7 +240,7 @@ export function attachMobileRumAutomationHooks(testType: any): any {
     if (!device || typeof device.openUrl !== 'function') {
       return;
     }
-    await pushTrueCoverageSetForCurrentTest(device, testInfo, setUrlPrefix, 1);
+    await resyncTrueCoverageSetForCurrentTest(device, testInfo);
     await openUrlAutomationWithRetries(device, flushUrl);
   });
 

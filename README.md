@@ -181,9 +181,13 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **No screenshots on failure**  
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
 
-- **RUM events not linked to tests**  
-  Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. On mobile, set `TESTCHIMP_PROJECT_TYPE` and handle `testchimp-rum://` URLs in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationIntent` on Android).
+- **RUM events not linked to tests / missing `ci_test_info` (mobile)**  
+  Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. Set `TESTCHIMP_PROJECT_TYPE=android|ios` and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  
+  **Android SDK:** use **testchimp-rum-android ≥ 0.1.6** (automation **`/v1/set`** updates CI on the **caller thread** so `device.openUrl` returns after CI is in memory).  
+  **Runner:** **`@testchimp/playwright` ≥ 0.1.36** sends multiple `set` bursts after `launchApp`, an optional settle delay, and one **`afterEach` `set`** to tighten timing around early emits and async tails. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms) on slow devices.
 
+- **RUM events not linked to tests (web)**  
+  Same `installTestChimp` barrel; web uses `__TC_CI_TEST_INFO` on `page` for `@testchimp/rum-js`.
 - **Verbose logging**  
   Set `verbose: true` in reporter options or use it during setup to see which steps are captured and when reports are sent.
 

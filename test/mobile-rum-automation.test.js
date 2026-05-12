@@ -96,11 +96,13 @@ test('beforeEach calls launchApp before openUrl when bundleId and launchApp exis
   };
 
   await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 6);
   assert.equal(calls[0].kind, 'openUrl');
   assert.deepEqual(calls[1], { kind: 'launch', bid: 'com.example.app' });
   assert.equal(calls[2].kind, 'openUrl');
   assert.equal(calls[3].kind, 'openUrl');
+  assert.equal(calls[4].kind, 'openUrl');
+  assert.equal(calls[5].kind, 'openUrl');
 });
 
 test('successive tests get distinct set payloads from their testInfo', async () => {
@@ -166,7 +168,8 @@ test('openUrl set retries until success', async () => {
       hooks.beforeEach = fn;
       return this;
     },
-    afterEach() {
+    afterEach(fn) {
+      hooks.afterEach = fn;
       return this;
     },
   });
@@ -185,7 +188,7 @@ test('openUrl set retries until success', async () => {
   assert.equal(openCount, 3);
 });
 
-test('beforeEach sends set URL twice when app launch succeeds', async () => {
+test('beforeEach sends set URL four times when app launch succeeds', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
   const urls = [];
   const device = {
@@ -218,8 +221,10 @@ test('beforeEach sends set URL twice when app launch succeeds', async () => {
 
   await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
   const setUrls = urls.filter((u) => u.includes('/set?p='));
-  assert.equal(setUrls.length, 2);
+  assert.equal(setUrls.length, 4);
   assert.equal(setUrls[0], setUrls[1]);
+  assert.equal(setUrls[0], setUrls[2]);
+  assert.equal(setUrls[0], setUrls[3]);
 });
 
 test('beforeEach no-op when device is missing (e.g. setup project)', async () => {

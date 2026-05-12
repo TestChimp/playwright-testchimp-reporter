@@ -8,8 +8,18 @@ const MAX_OPEN_URL_CHARS = 8000;
 
 const SET_OPEN_URL_MAX_ATTEMPTS = 3;
 const SET_OPEN_URL_RETRY_DELAY_MS = 400;
-const SET_AFTER_LAUNCH_REPEAT_COUNT = 2;
-const SET_AFTER_LAUNCH_REPEAT_DELAY_MS = 300;
+/** Extra `set` bursts after `launchApp` so CI is applied before UI steps (reduces null ci_test_info from early emits). */
+const SET_AFTER_LAUNCH_REPEAT_COUNT = 4;
+const SET_AFTER_LAUNCH_REPEAT_DELAY_MS = 120;
+
+/** Optional pause (ms) after the last `set` so the app can process the VIEW intent before the next Playwright step. */
+function resolvePostSetSettleMs(): number {
+  const raw = process.env.TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS;
+  if (raw === undefined || raw === '') return 100;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return 100;
+  return Math.max(0, Math.min(500, n));
+}
 
 export interface MobileRumAutomationUrls {
   setUrlPrefix: string;
@@ -89,13 +99,35 @@ async function pushSetUrlWithPostLaunchRepeat(
 
 let warnedMobileAutomationOnce = false;
 
+async function pushTrueCoverageSetForCurrentTest(
+  device: MobileDeviceNonNull,
+  testInfo: TestInfoForCi,
+  setUrlPrefix: string,
+  repeatBurst: number
+): Promise<boolean> {
+  const project = testInfo.project as { rootDir?: string } | undefined;
+  const projectRootDir = project?.rootDir ?? process.cwd();
+  const ciJson = buildCiTestInfoJson(testInfo, projectRootDir);
+  const built = buildAutomationSetOpenUrl(setUrlPrefix, ciJson);
+  if (typeof built === 'object' && 'error' in built) {
+    if (!warnedMobileAutomationOnce) {
+      warnedMobileAutomationOnce = true;
+      // eslint-disable-next-line no-console
+      console.warn(built.error);
+    }
+    return false;
+  }
+  await pushSetUrlWithPostLaunchRepeat(device, built, Math.max(1, repeatBurst));
+  return true;
+}
+
 /**
  * Register `beforeEach` / `afterEach` on the given Playwright `TestType` to push CI JSON into the app via
  * `device.openUrl` (mobilecli `device.url`). Used when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`.
  *
- * Each test's `beforeEach` builds `ci_test_info` from **that** run's `testInfo`, optionally foregrounds the
- * app with `device.launchApp(bundleId)` when both are available, then opens the set URL. `afterEach`
- * clears automation context via the clear URL so the next test receives a fresh set payload.
+ * Each test's `beforeEach` clears prior CI, optionally `launchApp`, then sends one or more `set` URLs and
+ * a short settle delay so the app can apply CI before steps run. `afterEach` sends one more `set` for the
+ * same test (helps late emits / async tails before the next test's `clear`).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function attachMobileRumAutomationHooks(testType: any): any {
@@ -125,20 +157,20 @@ export function attachMobileRumAutomationHooks(testType: any): any {
       }
     }
 
-    const project = testInfo.project as { rootDir?: string } | undefined;
-    const projectRootDir = project?.rootDir ?? process.cwd();
-    const ciJson = buildCiTestInfoJson(testInfo, projectRootDir);
-    const built = buildAutomationSetOpenUrl(setUrlPrefix, ciJson);
-    if (typeof built === 'object' && 'error' in built) {
-      if (!warnedMobileAutomationOnce) {
-        warnedMobileAutomationOnce = true;
-        // eslint-disable-next-line no-console
-        console.warn(built.error);
-      }
+    const repeatBurst = launchedApp ? SET_AFTER_LAUNCH_REPEAT_COUNT : 1;
+    const ok = await pushTrueCoverageSetForCurrentTest(device, testInfo, setUrlPrefix, repeatBurst);
+    if (!ok) return;
+    const settle = resolvePostSetSettleMs();
+    if (settle > 0) {
+      await sleep(settle);
+    }
+  });
+
+  testType.afterEach(async ({ device }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
+    if (!device || typeof device.openUrl !== 'function') {
       return;
     }
-    const repeats = launchedApp ? SET_AFTER_LAUNCH_REPEAT_COUNT : 1;
-    await pushSetUrlWithPostLaunchRepeat(device, built, repeats);
+    await pushTrueCoverageSetForCurrentTest(device, testInfo, setUrlPrefix, 1);
   });
 
   return testType;

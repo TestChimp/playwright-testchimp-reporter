@@ -183,8 +183,8 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 - **RUM events not linked to tests / missing `ci_test_info` (mobile)**  
   Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. Set `TESTCHIMP_PROJECT_TYPE=android|ios` and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  
-  **Android SDK:** use **testchimp-rum-android ≥ 0.1.6** (automation **`/v1/set`** updates CI on the **caller thread** so `device.openUrl` returns after CI is in memory).  
-  **Runner:** **`@testchimp/playwright` ≥ 0.1.36** sends multiple `set` bursts after `launchApp`, an optional settle delay, and one **`afterEach` `set`** to tighten timing around early emits and async tails. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms) on slow devices.
+  **Android SDK:** use **testchimp-rum-android ≥ 0.1.7** (automation **`/v1/set`** on caller thread; **`/v1/flush`** drains buffered events when the runner opens that URL).  
+  **Runner:** **`@testchimp/playwright` ≥ 0.1.37** sends `set` bursts after `launchApp`, settle delay, **`afterEach` `set` + `v1/flush`** so short tests still upload RUM before the next test’s `clear`. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms) on slow devices. Optional URL overrides: **`TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`**.
 
 - **RUM events not linked to tests (web)**  
   Same `installTestChimp` barrel; web uses `__TC_CI_TEST_INFO` on `page` for `@testchimp/rum-js`.

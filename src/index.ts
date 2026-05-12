@@ -42,6 +42,7 @@ export {
   attachMobileRumAutomationHooks,
   buildAutomationSetOpenUrl,
   getMobileRumAutomationUrls,
+  type MobileRumAutomationUrls,
 } from './rum-automation-mobile';
 /** ExploreChimp / agents.proto JSON mirrors (camelCase). */
 export type * from './explorechimp/agents-explorechimp-json';

@@ -20,6 +20,12 @@ function decodeSetPayload(url) {
   return JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
 }
 
+test('getMobileRumAutomationUrls includes default flush URL', () => {
+  const { getMobileRumAutomationUrls } = require('../dist/rum-automation-mobile');
+  const urls = getMobileRumAutomationUrls();
+  assert.equal(urls.flushUrl, 'testchimp-rum://truecoverage/v1/flush');
+});
+
 test('attachMobileRumAutomationHooks registers beforeEach for mobile automation', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
 
@@ -60,6 +66,47 @@ test('attachMobileRumAutomationHooks registers beforeEach for mobile automation'
   assert.equal(calls.length, 2);
   assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
   assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
+
+  await hooks.afterEach({ device }, testInfo);
+  assert.equal(calls.length, 4);
+  assert.ok(calls[2].includes('testchimp-rum://truecoverage/v1/set?p='));
+  assert.equal(calls[3], 'testchimp-rum://truecoverage/v1/flush');
+});
+
+test('afterEach sends flush after trailing set', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  const calls = [];
+  const device = {
+    openUrl: async (u) => {
+      calls.push(u);
+    },
+  };
+  const hooks = { beforeEach: null, afterEach: null };
+  attachMobileRumAutomationHooks({
+    beforeEach(fn) {
+      hooks.beforeEach = fn;
+      return this;
+    },
+    afterEach(fn) {
+      hooks.afterEach = fn;
+      return this;
+    },
+  });
+
+  const testInfo = {
+    file: 'tests/foo.spec.ts',
+    title: 't',
+    titlePath: () => ['', 'foo.spec.ts', 't'],
+    project: { name: 'mobile', rootDir: '/tmp/r' },
+    retry: 0,
+    workerIndex: 0,
+    testId: 'flush-order',
+  };
+
+  await hooks.afterEach({ device }, testInfo);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes('/set?p='));
+  assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/flush');
 });
 
 test('beforeEach calls launchApp before openUrl when bundleId and launchApp exist', async () => {

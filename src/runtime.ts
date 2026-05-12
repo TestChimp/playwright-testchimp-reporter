@@ -8,7 +8,7 @@
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
  * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  *
- * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app.
+ * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. End-of-test `v1/flush` uploads buffered RUM before the next test's `clear`.
  */
 
 import * as path from 'path';

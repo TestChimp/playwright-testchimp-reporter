@@ -2,6 +2,7 @@ import { buildCiTestInfoJson, type TestInfoForCi } from './ci-test-info';
 
 const DEFAULT_SET_PREFIX = 'testchimp-rum://truecoverage/v1/set?p=';
 const DEFAULT_CLEAR_URL = 'testchimp-rum://truecoverage/v1/clear';
+const DEFAULT_FLUSH_URL = 'testchimp-rum://truecoverage/v1/flush';
 
 /** Max length for the full openUrl string (conservative for iOS). */
 const MAX_OPEN_URL_CHARS = 8000;
@@ -24,6 +25,7 @@ function resolvePostSetSettleMs(): number {
 export interface MobileRumAutomationUrls {
   setUrlPrefix: string;
   clearUrl: string;
+  flushUrl: string;
 }
 
 /** Mobilewright worker fixtures used by TrueCoverage hooks (`device` absent in non-mobile projects, e.g. setup). */
@@ -39,12 +41,14 @@ type MobileDeviceNonNull = NonNullable<MobileDeviceWorkerFixtures['device']>;
 
 /**
  * URL prefix and clear URL for Mobilewright TrueCoverage (`device.openUrl`).
- * Optional overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL`.
+ * Optional overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL`,
+ * `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`.
  */
 export function getMobileRumAutomationUrls(): MobileRumAutomationUrls {
   return {
     setUrlPrefix: process.env.TESTCHIMP_RUM_AUTOMATION_SET_PREFIX?.trim() || DEFAULT_SET_PREFIX,
     clearUrl: process.env.TESTCHIMP_RUM_AUTOMATION_CLEAR_URL?.trim() || DEFAULT_CLEAR_URL,
+    flushUrl: process.env.TESTCHIMP_RUM_AUTOMATION_FLUSH_URL?.trim() || DEFAULT_FLUSH_URL,
   };
 }
 
@@ -63,7 +67,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function openUrlSetWithRetries(device: MobileDeviceNonNull, url: string): Promise<void> {
+async function openUrlAutomationWithRetries(device: MobileDeviceNonNull, url: string): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < SET_OPEN_URL_MAX_ATTEMPTS; attempt++) {
     try {
@@ -79,7 +83,7 @@ async function openUrlSetWithRetries(device: MobileDeviceNonNull, url: string): 
   const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
   // eslint-disable-next-line no-console
   console.warn(
-    `[TestChimp] TrueCoverage device.openUrl(set) failed after ${SET_OPEN_URL_MAX_ATTEMPTS} attempts (non-fatal): ${msg}`
+    `[TestChimp] TrueCoverage device.openUrl failed after ${SET_OPEN_URL_MAX_ATTEMPTS} attempts (non-fatal): ${msg}`
   );
 }
 
@@ -90,7 +94,7 @@ async function pushSetUrlWithPostLaunchRepeat(
 ): Promise<void> {
   const total = Math.max(1, repeats);
   for (let i = 0; i < total; i++) {
-    await openUrlSetWithRetries(device, url);
+    await openUrlAutomationWithRetries(device, url);
     if (i < total - 1) {
       await sleep(SET_AFTER_LAUNCH_REPEAT_DELAY_MS);
     }
@@ -127,11 +131,12 @@ async function pushTrueCoverageSetForCurrentTest(
  *
  * Each test's `beforeEach` clears prior CI, optionally `launchApp`, then sends one or more `set` URLs and
  * a short settle delay so the app can apply CI before steps run. `afterEach` sends one more `set` for the
- * same test (helps late emits / async tails before the next test's `clear`).
+ * same test (helps late emits / async tails), then `testchimp-rum://truecoverage/v1/flush` so buffered RUM
+ * uploads before the next test's `clear` (short runs vs the SDK timer flush).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function attachMobileRumAutomationHooks(testType: any): any {
-  const { setUrlPrefix, clearUrl } = getMobileRumAutomationUrls();
+  const { setUrlPrefix, clearUrl, flushUrl } = getMobileRumAutomationUrls();
 
   testType.beforeEach(async ({ device, bundleId }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
     if (!device || typeof device.openUrl !== 'function') {
@@ -171,6 +176,7 @@ export function attachMobileRumAutomationHooks(testType: any): any {
       return;
     }
     await pushTrueCoverageSetForCurrentTest(device, testInfo, setUrlPrefix, 1);
+    await openUrlAutomationWithRetries(device, flushUrl);
   });
 
   return testType;

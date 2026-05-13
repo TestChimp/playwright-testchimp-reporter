@@ -8,7 +8,7 @@
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
  * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  *
- * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. By default, **`/v1/clear` is not sent** before each test (avoids a clear→set gap with null `ci-test-info` on RUM); each test still `SET`s CI, then `afterEach` runs `v1/flush`. Optional **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** registers `afterAll` to send `clear`+`flush` after the spec file. When the fixture key is `screen`, the `screen` object is proxied so likely WebSocket/mobilecli transport failures trigger an extra `v1/set` resync (disable with `TESTCHIMP_RUM_TRANSPORT_RESYNC=0`). Opt in to legacy clear-before-each-test with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`.
+ * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, `installTrueCoverage` extends the Mobilewright **`device`** fixture so **`SET`** runs right after Mobilewright’s `launchApp`, before `screen` (see `extendMobileTestWithTrueCoverageDevice`). **`afterEach`** still sends a trailing `SET` + `v1/flush`. Integrate TestChimpRum URL handling in the app. By default, **`/v1/clear` is not sent** between tests (opt in with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`, handled in the `device` fixture). Optional **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** registers `afterAll` `clear`+`flush`. When the fixture key is `screen`, `screen` is proxied for transport-failure `SET` resync (`TESTCHIMP_RUM_TRANSPORT_RESYNC=0` to disable).
  */
 
 import * as path from 'path';
@@ -21,7 +21,10 @@ import {
 } from './explorechimp';
 import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from './project-type';
 import { attachMobileScreenTransportResync } from './mobile-screen-transport-resync';
-import { attachMobileRumAutomationHooks } from './rum-automation-mobile';
+import {
+  attachMobileRumAutomationHooks,
+  extendMobileTestWithTrueCoverageDevice,
+} from './rum-automation-mobile';
 
 /** Resolve test runtime module from the consumer project (web: Playwright, mobile: Mobilewright). */
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
@@ -81,7 +84,7 @@ function addMarkScreenStateFixture(test: any): any {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function installTrueCoverage(test: any): any {
   const withCi = mobileProject
-    ? test
+    ? extendMobileTestWithTrueCoverageDevice(test)
     : test.extend({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         page: async ({ page }: { page: any }, use: any, testInfo: any) => {

@@ -9,9 +9,6 @@ const MAX_OPEN_URL_CHARS = 8000;
 
 const SET_OPEN_URL_MAX_ATTEMPTS = 3;
 const SET_OPEN_URL_RETRY_DELAY_MS = 400;
-/** Extra `set` bursts after `launchApp` so CI is applied before UI steps (reduces null ci_test_info from early emits). */
-const SET_AFTER_LAUNCH_REPEAT_COUNT = 4;
-const SET_AFTER_LAUNCH_REPEAT_DELAY_MS = 120;
 
 /** Optional pause (ms) after the last `set` so the app can process the VIEW intent before the next Playwright step. */
 function resolvePostSetSettleMs(): number {
@@ -164,17 +161,10 @@ async function openUrlAutomationWithRetries(device: MobileDeviceNonNull, url: st
   );
 }
 
-async function pushSetUrlWithPostLaunchRepeat(
-  device: MobileDeviceNonNull,
-  url: string,
-  repeats: number
-): Promise<void> {
+async function pushSetUrlRepeats(device: MobileDeviceNonNull, url: string, repeats: number): Promise<void> {
   const total = Math.max(1, repeats);
   for (let i = 0; i < total; i++) {
     await openUrlAutomationWithRetries(device, url);
-    if (i < total - 1) {
-      await sleep(SET_AFTER_LAUNCH_REPEAT_DELAY_MS);
-    }
   }
 }
 
@@ -198,8 +188,40 @@ async function pushTrueCoverageSetForCurrentTest(
     }
     return false;
   }
-  await pushSetUrlWithPostLaunchRepeat(device, built, Math.max(1, repeatBurst));
+  await pushSetUrlRepeats(device, built, Math.max(1, repeatBurst));
   return true;
+}
+
+/**
+ * Wrap Mobilewright `test` so TrueCoverage SET runs in the `device` fixture immediately after
+ * Mobilewright's own `launchApp`, before fixtures that depend on `device` (e.g. `screen`).
+ * Used from {@link installTrueCoverage} when `TESTCHIMP_PROJECT_TYPE` is ios/android — not required for direct import by consumers.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function extendMobileTestWithTrueCoverageDevice(test: any): any {
+  const { setUrlPrefix, clearUrl } = getMobileRumAutomationUrls();
+
+  return test.extend({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    device: async ({ device }: { device: any }, use: any, testInfo: TestInfoForCi) => {
+      const d = device as MobileDeviceNonNull | undefined;
+      if (!d || typeof d.openUrl !== 'function') {
+        await use(device);
+        return;
+      }
+      if (clearBetweenTestsEnabled()) {
+        await openUrlAutomationWithRetries(d, clearUrl);
+      }
+      const ok = await pushTrueCoverageSetForCurrentTest(d, testInfo, setUrlPrefix, 1);
+      if (ok) {
+        const settle = resolvePostSetSettleMs();
+        if (settle > 0) {
+          await sleep(settle);
+        }
+      }
+      await use(device);
+    },
+  });
 }
 
 /**
@@ -219,50 +241,17 @@ export async function resyncTrueCoverageSetForCurrentTest(
 }
 
 /**
- * Register `beforeEach` / `afterEach` (and optionally `afterAll`) on the given Playwright
- * `TestType` to push CI JSON into the app via `device.openUrl` (mobilecli `device.url`).
- * Used when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`.
+ * Register `afterEach` (and optionally `afterAll`) on the given Playwright `TestType` for mobile TrueCoverage.
+ * **SET + settle + optional `/v1/clear`** run in the extended `device` fixture from {@link extendMobileTestWithTrueCoverageDevice}
+ * (wired by `installTrueCoverage` when `TESTCHIMP_PROJECT_TYPE` is ios/android).
  *
- * By default, **`/v1/clear` is not sent** before each test (avoids a clear→set window where RUM emits have no
- * `ci-test-info`). Each `beforeEach` overwrites CI via one or more `SET` URLs. Opt in to legacy clear-first
- * behavior with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`.
- *
- * `beforeEach`: optionally `launchApp`, then `SET` burst + settle. `afterEach`: trailing `SET` then `flush`.
- * **`afterAll`:** only when `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`: `clear` + `flush` after the file's tests.
+ * By default, **`/v1/clear` is not sent** between tests unless `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`
+ * (handled in the device fixture). **`afterEach`:** trailing `SET` then `/v1/flush`. **`afterAll`:** only when
+ * `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`: `clear` + `flush` after the file's tests.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function attachMobileRumAutomationHooks(testType: any): any {
-  const { setUrlPrefix, clearUrl, flushUrl } = getMobileRumAutomationUrls();
-
-  testType.beforeEach(async ({ device, bundleId }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
-    if (!device || typeof device.openUrl !== 'function') {
-      return;
-    }
-    if (clearBetweenTestsEnabled()) {
-      await openUrlAutomationWithRetries(device, clearUrl);
-    }
-    let launchedApp = false;
-    const bid = typeof bundleId === 'string' && bundleId.trim() !== '' ? bundleId.trim() : undefined;
-    if (bid != null && typeof device.launchApp === 'function') {
-      try {
-        const ms = resolveOpenUrlTimeoutMs();
-        await withTimeout(device.launchApp(bid), ms, 'TrueCoverage device.launchApp');
-        launchedApp = true;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // eslint-disable-next-line no-console
-        console.warn(`[TestChimp] TrueCoverage device.launchApp failed (non-fatal): ${msg}`);
-      }
-    }
-
-    const repeatBurst = launchedApp ? SET_AFTER_LAUNCH_REPEAT_COUNT : 1;
-    const ok = await pushTrueCoverageSetForCurrentTest(device, testInfo, setUrlPrefix, repeatBurst);
-    if (!ok) return;
-    const settle = resolvePostSetSettleMs();
-    if (settle > 0) {
-      await sleep(settle);
-    }
-  });
+  const { flushUrl, clearUrl } = getMobileRumAutomationUrls();
 
   testType.afterEach(async ({ device }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
     if (!device || typeof device.openUrl !== 'function') {

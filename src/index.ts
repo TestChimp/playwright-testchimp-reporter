@@ -28,7 +28,7 @@
  * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
  * Fixture/runtime switching: default web mode uses `page`; set `TESTCHIMP_PROJECT_TYPE=ios|android`
  * (case-insensitive) to switch runtime fixture wiring to `screen`.
- * Mobile TrueCoverage: `TESTCHIMP_PROJECT_TYPE=ios|android` + TestChimpRum URL handler; see README. Optional **`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`** disables automatic `v1/set` after likely transport failures on mobile `screen` calls. **`TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`** opts in to legacy `/v1/clear` before each test (default off). **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** opts in to `afterAll` `clear`+`flush` after each spec file (default off).
+ * Mobile TrueCoverage: `TESTCHIMP_PROJECT_TYPE=ios|android` + TestChimpRum URL handler; see README. `installTestChimp` extends **`device`** so **`SET`** runs after Mobilewright **`launchApp`**. Optional **`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`** disables automatic `v1/set` after likely transport failures on mobile `screen` calls. **`TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`** opts in to legacy `/v1/clear` before each test `SET` in the **`device`** fixture (default off). **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** opts in to `afterAll` `clear`+`flush` after each spec file (default off).
  * ExploreChimp: set `EXPLORECHIMP_ENABLED=true`, use `test('…', async ({ markScreenState }) => …)`; `TESTCHIMP_BATCH_INVOCATION_ID`, sources/regex envs as documented in the runtime module. Set **`TESTCHIMP_BRANCH_NAME`** (or `TESTCHIMP_BRANCH`) locally so analyze requests send `branchName` and the server can persist `branch_id`.
  * Suite batch id: the reporter writes `.testchimp-batch-invocation-id` under the Playwright project root at run start (when unset, generates a UUID) and removes it at run end so ExploreChimp fixtures and CI stay aligned.
  */
@@ -43,6 +43,7 @@ export {
   buildAutomationSetOpenUrl,
   clearBetweenTestsEnabled,
   suiteTeardownClearEnabled,
+  extendMobileTestWithTrueCoverageDevice,
   getMobileRumAutomationUrls,
   isLikelyMobileTransportFailure,
   resyncTrueCoverageSetForCurrentTest,

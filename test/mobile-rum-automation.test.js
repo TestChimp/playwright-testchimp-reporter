@@ -26,7 +26,21 @@ test('getMobileRumAutomationUrls includes default flush URL', () => {
   assert.equal(urls.flushUrl, 'testchimp-rum://truecoverage/v1/flush');
 });
 
-test('attachMobileRumAutomationHooks registers beforeEach for mobile automation', async () => {
+function getCapturedDeviceFixture() {
+  let deviceFixture;
+  const fakeTest = {
+    extend(fixtures) {
+      deviceFixture = fixtures.device;
+      return fakeTest;
+    },
+  };
+  const { extendMobileTestWithTrueCoverageDevice } = require('../dist/rum-automation-mobile');
+  extendMobileTestWithTrueCoverageDevice(fakeTest);
+  assert.ok(typeof deviceFixture === 'function');
+  return deviceFixture;
+}
+
+test('attachMobileRumAutomationHooks registers afterEach only (SET is device fixture)', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
 
   const calls = [];
@@ -50,7 +64,7 @@ test('attachMobileRumAutomationHooks registers beforeEach for mobile automation'
 
   const out = attachMobileRumAutomationHooks(fakeTest);
   assert.strictEqual(out, fakeTest);
-  assert.ok(typeof hooks.beforeEach === 'function');
+  assert.equal(hooks.beforeEach, null);
 
   const testInfo = {
     file: 'tests/foo.spec.ts',
@@ -62,14 +76,10 @@ test('attachMobileRumAutomationHooks registers beforeEach for mobile automation'
     testId: 'abc',
   };
 
-  await hooks.beforeEach({ device }, testInfo);
-  assert.equal(calls.length, 1);
-  assert.ok(calls[0].includes('testchimp-rum://truecoverage/v1/set?p='));
-
   await hooks.afterEach({ device }, testInfo);
-  assert.equal(calls.length, 3);
-  assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
-  assert.equal(calls[2], 'testchimp-rum://truecoverage/v1/flush');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes('testchimp-rum://truecoverage/v1/set?p='));
+  assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/flush');
 });
 
 test('afterEach sends flush after trailing set', async () => {
@@ -80,12 +90,8 @@ test('afterEach sends flush after trailing set', async () => {
       calls.push(u);
     },
   };
-  const hooks = { beforeEach: null, afterEach: null };
+  const hooks = { afterEach: null };
   attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
     afterEach(fn) {
       hooks.afterEach = fn;
       return this;
@@ -108,29 +114,15 @@ test('afterEach sends flush after trailing set', async () => {
   assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/flush');
 });
 
-test('beforeEach calls launchApp before openUrl when bundleId and launchApp exist', async () => {
-  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+test('device fixture does not call launchApp (Mobilewright owns launch)', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
   const calls = [];
   const device = {
-    launchApp: async (bid) => {
-      calls.push({ kind: 'launch', bid });
+    launchApp: async () => {
+      calls.push('launch');
     },
-    openUrl: async (u) => {
-      calls.push({ kind: 'openUrl', u });
-    },
+    openUrl: async (u) => calls.push(u),
   };
-  const hooks = { beforeEach: null, afterEach: null };
-  attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
-    afterEach(fn) {
-      hooks.afterEach = fn;
-      return this;
-    },
-  });
-
   const testInfo = {
     file: 'tests/foo.spec.ts',
     title: 't',
@@ -140,35 +132,27 @@ test('beforeEach calls launchApp before openUrl when bundleId and launchApp exis
     workerIndex: 0,
     testId: 'id1',
   };
-
-  await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
-  assert.equal(calls.length, 5);
-  assert.deepEqual(calls[0], { kind: 'launch', bid: 'com.example.app' });
-  assert.equal(calls[1].kind, 'openUrl');
-  assert.equal(calls[2].kind, 'openUrl');
-  assert.equal(calls[3].kind, 'openUrl');
-  assert.equal(calls[4].kind, 'openUrl');
+  let used;
+  await deviceFixture(
+    { device },
+    async (d) => {
+      used = d;
+    },
+    testInfo
+  );
+  assert.strictEqual(used, device);
+  assert.ok(!calls.includes('launch'));
+  assert.equal(calls.filter((c) => typeof c === 'string' && c.includes('/set?p=')).length, 1);
 });
 
-test('successive tests get distinct set payloads from their testInfo', async () => {
-  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+test('successive device fixture invocations get distinct set payloads from their testInfo', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
   const calls = [];
   const device = {
     openUrl: async (u) => {
       calls.push(u);
     },
   };
-  const hooks = { beforeEach: null, afterEach: null };
-  attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
-    afterEach(fn) {
-      hooks.afterEach = fn;
-      return this;
-    },
-  });
 
   const base = {
     file: 'tests/foo.spec.ts',
@@ -178,14 +162,16 @@ test('successive tests get distinct set payloads from their testInfo', async () 
     testId: 'same',
   };
 
-  await hooks.beforeEach(
-    { device },
-    { ...base, title: 'first', titlePath: () => ['', 'foo.spec.ts', 'first'] }
-  );
-  await hooks.beforeEach(
-    { device },
-    { ...base, title: 'second', titlePath: () => ['', 'foo.spec.ts', 'second'] }
-  );
+  const run = async (title) => {
+    await deviceFixture(
+      { device },
+      async () => {},
+      { ...base, title, titlePath: () => ['', 'foo.spec.ts', title] }
+    );
+  };
+
+  await run('first');
+  await run('second');
 
   const setUrls = calls.filter((u) => u.includes('/set?p='));
   assert.equal(setUrls.length, 2);
@@ -195,8 +181,8 @@ test('successive tests get distinct set payloads from their testInfo', async () 
   assert.equal(calls.length, 2);
 });
 
-test('openUrl set retries until success', async () => {
-  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+test('device fixture openUrl set retries until success', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
   let openCount = 0;
   const device = {
     openUrl: async (u) => {
@@ -206,17 +192,6 @@ test('openUrl set retries until success', async () => {
       }
     },
   };
-  const hooks = { beforeEach: null, afterEach: null };
-  attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
-    afterEach(fn) {
-      hooks.afterEach = fn;
-      return this;
-    },
-  });
 
   const testInfo = {
     file: 'tests/foo.spec.ts',
@@ -228,30 +203,18 @@ test('openUrl set retries until success', async () => {
     testId: 'x',
   };
 
-  await hooks.beforeEach({ device }, testInfo);
+  await deviceFixture({ device }, async () => {}, testInfo);
   assert.equal(openCount, 3);
 });
 
-test('beforeEach sends set URL four times when app launch succeeds', async () => {
-  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+test('device fixture sends set URL once per test', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
   const urls = [];
   const device = {
-    launchApp: async () => {},
     openUrl: async (u) => {
       urls.push(u);
     },
   };
-  const hooks = { beforeEach: null, afterEach: null };
-  attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
-    afterEach(fn) {
-      hooks.afterEach = fn;
-      return this;
-    },
-  });
 
   const testInfo = {
     file: 'tests/foo.spec.ts',
@@ -263,18 +226,25 @@ test('beforeEach sends set URL four times when app launch succeeds', async () =>
     testId: 'x',
   };
 
-  await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
+  await deviceFixture({ device, bundleId: 'com.example.app' }, async () => {}, testInfo);
   const setUrls = urls.filter((u) => u.includes('/set?p='));
-  assert.equal(setUrls.length, 4);
-  assert.equal(setUrls[0], setUrls[1]);
-  assert.equal(setUrls[0], setUrls[2]);
-  assert.equal(setUrls[0], setUrls[3]);
+  assert.equal(setUrls.length, 1);
 });
 
-test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever', async () => {
+test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever (device fixture)', async () => {
   process.env.TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS = '50';
   try {
-    const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
+    const { extendMobileTestWithTrueCoverageDevice } = require('../dist/rum-automation-mobile');
+    let deviceFixture;
+    const fakeTest = {
+      extend(f) {
+        deviceFixture = f.device;
+        return fakeTest;
+      },
+    };
+    extendMobileTestWithTrueCoverageDevice(fakeTest);
+
     const calls = [];
     const device = {
       openUrl: async () => {
@@ -284,17 +254,6 @@ test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever', async () 
         });
       },
     };
-    const hooks = { beforeEach: null, afterEach: null };
-    attachMobileRumAutomationHooks({
-      beforeEach(fn) {
-        hooks.beforeEach = fn;
-        return this;
-      },
-      afterEach(fn) {
-        hooks.afterEach = fn;
-        return this;
-      },
-    });
 
     const testInfo = {
       file: 'tests/foo.spec.ts',
@@ -307,29 +266,18 @@ test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever', async () 
     };
 
     const t0 = Date.now();
-    await hooks.beforeEach({ device }, testInfo);
+    await deviceFixture({ device }, async () => {}, testInfo);
     const elapsed = Date.now() - t0;
-    assert.ok(elapsed < 8000, `expected bounded hook time, got ${elapsed}ms`);
+    assert.ok(elapsed < 8000, `expected bounded fixture time, got ${elapsed}ms`);
     assert.ok(calls.length >= 3, 'should retry hung openUrl');
   } finally {
     delete process.env.TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS;
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
   }
 });
 
-test('beforeEach no-op when device is missing (e.g. setup project)', async () => {
-  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
-  const hooks = { beforeEach: null, afterEach: null };
-  attachMobileRumAutomationHooks({
-    beforeEach(fn) {
-      hooks.beforeEach = fn;
-      return this;
-    },
-    afterEach(fn) {
-      hooks.afterEach = fn;
-      return this;
-    },
-  });
-
+test('device fixture no-op when device cannot openUrl (e.g. setup project)', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
   const testInfo = {
     file: 'setup/global.setup.spec.js',
     title: 'global setup',
@@ -339,17 +287,17 @@ test('beforeEach no-op when device is missing (e.g. setup project)', async () =>
     workerIndex: 0,
     testId: 'setup',
   };
-
-  await hooks.beforeEach({}, testInfo);
+  let sawUse = false;
+  await deviceFixture({}, async () => {
+    sawUse = true;
+  }, testInfo);
+  assert.ok(sawUse);
 });
 
 test('attachMobileRumAutomationHooks does not register afterAll clear by default', async () => {
   const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
   let afterAllFn = null;
   attachMobileRumAutomationHooks({
-    beforeEach() {
-      return this;
-    },
     afterEach() {
       return this;
     },
@@ -369,9 +317,6 @@ test('attachMobileRumAutomationHooks registers afterAll clear+flush when SUITE_T
     const { attachMobileRumAutomationHooks } = require(resolved);
     let afterAllFn = null;
     attachMobileRumAutomationHooks({
-      beforeEach() {
-        return this;
-      },
       afterEach() {
         return this;
       },
@@ -391,33 +336,27 @@ test('attachMobileRumAutomationHooks registers afterAll clear+flush when SUITE_T
   }
 });
 
-test('legacy: beforeEach clears first when TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1', async () => {
+test('legacy: device fixture clears first when TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1', async () => {
   process.env.TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS = '1';
   try {
     const resolved = require.resolve('../dist/rum-automation-mobile');
     delete require.cache[resolved];
-    const { attachMobileRumAutomationHooks } = require(resolved);
+    const { extendMobileTestWithTrueCoverageDevice } = require(resolved);
+    let deviceFixture;
+    const fakeTest = {
+      extend(f) {
+        deviceFixture = f.device;
+        return fakeTest;
+      },
+    };
+    extendMobileTestWithTrueCoverageDevice(fakeTest);
+
     const calls = [];
     const device = {
       openUrl: async (u) => {
         calls.push(u);
       },
     };
-    const hooks = { beforeEach: null, afterAllFn: undefined };
-    attachMobileRumAutomationHooks({
-      beforeEach(fn) {
-        hooks.beforeEach = fn;
-        return this;
-      },
-      afterEach() {
-        return this;
-      },
-      afterAll(fn) {
-        hooks.afterAllFn = fn;
-        return this;
-      },
-    });
-    assert.ok(hooks.afterAllFn == null, 'afterAll should not be registered when CLEAR_BETWEEN_TESTS=1');
     const testInfo = {
       file: 'tests/foo.spec.ts',
       title: 'my test',
@@ -427,7 +366,7 @@ test('legacy: beforeEach clears first when TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEE
       workerIndex: 1,
       testId: 'abc',
     };
-    await hooks.beforeEach({ device }, testInfo);
+    await deviceFixture({ device }, async () => {}, testInfo);
     assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
     assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
   } finally {

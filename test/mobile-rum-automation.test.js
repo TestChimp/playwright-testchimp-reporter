@@ -63,14 +63,13 @@ test('attachMobileRumAutomationHooks registers beforeEach for mobile automation'
   };
 
   await hooks.beforeEach({ device }, testInfo);
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
-  assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].includes('testchimp-rum://truecoverage/v1/set?p='));
 
   await hooks.afterEach({ device }, testInfo);
-  assert.equal(calls.length, 4);
-  assert.ok(calls[2].includes('testchimp-rum://truecoverage/v1/set?p='));
-  assert.equal(calls[3], 'testchimp-rum://truecoverage/v1/flush');
+  assert.equal(calls.length, 3);
+  assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
+  assert.equal(calls[2], 'testchimp-rum://truecoverage/v1/flush');
 });
 
 test('afterEach sends flush after trailing set', async () => {
@@ -143,13 +142,12 @@ test('beforeEach calls launchApp before openUrl when bundleId and launchApp exis
   };
 
   await hooks.beforeEach({ device, bundleId: 'com.example.app' }, testInfo);
-  assert.equal(calls.length, 6);
-  assert.equal(calls[0].kind, 'openUrl');
-  assert.deepEqual(calls[1], { kind: 'launch', bid: 'com.example.app' });
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls[0], { kind: 'launch', bid: 'com.example.app' });
+  assert.equal(calls[1].kind, 'openUrl');
   assert.equal(calls[2].kind, 'openUrl');
   assert.equal(calls[3].kind, 'openUrl');
   assert.equal(calls[4].kind, 'openUrl');
-  assert.equal(calls[5].kind, 'openUrl');
 });
 
 test('successive tests get distinct set payloads from their testInfo', async () => {
@@ -194,8 +192,7 @@ test('successive tests get distinct set payloads from their testInfo', async () 
   const p1 = decodeSetPayload(setUrls[0]);
   const p2 = decodeSetPayload(setUrls[1]);
   assert.notEqual(JSON.stringify(p1), JSON.stringify(p2));
-  assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
-  assert.equal(calls[2], 'testchimp-rum://truecoverage/v1/clear');
+  assert.equal(calls.length, 2);
 });
 
 test('openUrl set retries until success', async () => {
@@ -344,4 +341,97 @@ test('beforeEach no-op when device is missing (e.g. setup project)', async () =>
   };
 
   await hooks.beforeEach({}, testInfo);
+});
+
+test('attachMobileRumAutomationHooks does not register afterAll clear by default', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  let afterAllFn = null;
+  attachMobileRumAutomationHooks({
+    beforeEach() {
+      return this;
+    },
+    afterEach() {
+      return this;
+    },
+    afterAll(fn) {
+      afterAllFn = fn;
+      return this;
+    },
+  });
+  assert.ok(afterAllFn == null);
+});
+
+test('attachMobileRumAutomationHooks registers afterAll clear+flush when SUITE_TEARDOWN_CLEAR=1', async () => {
+  process.env.TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR = '1';
+  try {
+    const resolved = require.resolve('../dist/rum-automation-mobile');
+    delete require.cache[resolved];
+    const { attachMobileRumAutomationHooks } = require(resolved);
+    let afterAllFn = null;
+    attachMobileRumAutomationHooks({
+      beforeEach() {
+        return this;
+      },
+      afterEach() {
+        return this;
+      },
+      afterAll(fn) {
+        afterAllFn = fn;
+        return this;
+      },
+    });
+    assert.ok(typeof afterAllFn === 'function');
+    const calls = [];
+    await afterAllFn({ device: { openUrl: async (u) => calls.push(u) } });
+    assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
+    assert.equal(calls[1], 'testchimp-rum://truecoverage/v1/flush');
+  } finally {
+    delete process.env.TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR;
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
+  }
+});
+
+test('legacy: beforeEach clears first when TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1', async () => {
+  process.env.TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS = '1';
+  try {
+    const resolved = require.resolve('../dist/rum-automation-mobile');
+    delete require.cache[resolved];
+    const { attachMobileRumAutomationHooks } = require(resolved);
+    const calls = [];
+    const device = {
+      openUrl: async (u) => {
+        calls.push(u);
+      },
+    };
+    const hooks = { beforeEach: null, afterAllFn: undefined };
+    attachMobileRumAutomationHooks({
+      beforeEach(fn) {
+        hooks.beforeEach = fn;
+        return this;
+      },
+      afterEach() {
+        return this;
+      },
+      afterAll(fn) {
+        hooks.afterAllFn = fn;
+        return this;
+      },
+    });
+    assert.ok(hooks.afterAllFn == null, 'afterAll should not be registered when CLEAR_BETWEEN_TESTS=1');
+    const testInfo = {
+      file: 'tests/foo.spec.ts',
+      title: 'my test',
+      titlePath: () => ['', 'foo.spec.ts', 'my test'],
+      project: { name: 'mobile', rootDir: '/tmp/r' },
+      retry: 0,
+      workerIndex: 1,
+      testId: 'abc',
+    };
+    await hooks.beforeEach({ device }, testInfo);
+    assert.equal(calls[0], 'testchimp-rum://truecoverage/v1/clear');
+    assert.ok(calls[1].includes('testchimp-rum://truecoverage/v1/set?p='));
+  } finally {
+    delete process.env.TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS;
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
+  }
 });

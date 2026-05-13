@@ -68,6 +68,27 @@ export function transportResyncDisabled(): boolean {
 }
 
 /**
+ * When true, each test's `beforeEach` sends `/v1/clear` before `SET` (legacy).
+ * Default false: skip clear between tests so the app keeps CI until overwritten by `SET`,
+ * avoiding a clear→set gap where RUM emits snapshot nil. Opt in with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`.
+ */
+export function clearBetweenTestsEnabled(): boolean {
+  const raw = process.env.TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+/**
+ * When true, register `afterAll` to send `/v1/clear` then `/v1/flush` after the spec file finishes.
+ * Default false: no automatic clear at file end (avoids clearing CI before the next spec file's `SET`,
+ * and matches "no clear during suite" unless explicitly opted in).
+ * Opt in with `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`.
+ */
+export function suiteTeardownClearEnabled(): boolean {
+  const raw = process.env.TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR?.trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+/**
  * Heuristic: mobilecli / WebSocket abnormal close or connection drop (e.g. code 1006).
  * Used to re-send TrueCoverage `SET` so the next RUM emit can carry `ci_test_info` again.
  */
@@ -91,7 +112,9 @@ export function isLikelyMobileTransportFailure(err: unknown): boolean {
 /**
  * URL prefix and clear URL for Mobilewright TrueCoverage (`device.openUrl`).
  * Optional overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL`,
- * `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`, `TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS` (per `openUrl`/`launchApp` call, default 25000, clamp 100–120000).
+ * `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`, `TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS` (per `openUrl`/`launchApp` call, default 25000, clamp 100–120000),
+ * `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS` (default off: no `/v1/clear` before each test; see {@link clearBetweenTestsEnabled}),
+ * `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR` (default off: no `afterAll` clear+flush; see {@link suiteTeardownClearEnabled}).
  */
 export function getMobileRumAutomationUrls(): MobileRumAutomationUrls {
   return {
@@ -196,13 +219,16 @@ export async function resyncTrueCoverageSetForCurrentTest(
 }
 
 /**
- * Register `beforeEach` / `afterEach` on the given Playwright `TestType` to push CI JSON into the app via
- * `device.openUrl` (mobilecli `device.url`). Used when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`.
+ * Register `beforeEach` / `afterEach` (and optionally `afterAll`) on the given Playwright
+ * `TestType` to push CI JSON into the app via `device.openUrl` (mobilecli `device.url`).
+ * Used when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`.
  *
- * Each test's `beforeEach` clears prior CI, optionally `launchApp`, then sends one or more `set` URLs and
- * a short settle delay so the app can apply CI before steps run. `afterEach` sends one more `set` for the
- * same test (helps late emits / async tails), then `testchimp-rum://truecoverage/v1/flush` so buffered RUM
- * uploads before the next test's `clear` (short runs vs the SDK timer flush).
+ * By default, **`/v1/clear` is not sent** before each test (avoids a clear→set window where RUM emits have no
+ * `ci-test-info`). Each `beforeEach` overwrites CI via one or more `SET` URLs. Opt in to legacy clear-first
+ * behavior with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`.
+ *
+ * `beforeEach`: optionally `launchApp`, then `SET` burst + settle. `afterEach`: trailing `SET` then `flush`.
+ * **`afterAll`:** only when `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`: `clear` + `flush` after the file's tests.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function attachMobileRumAutomationHooks(testType: any): any {
@@ -212,7 +238,9 @@ export function attachMobileRumAutomationHooks(testType: any): any {
     if (!device || typeof device.openUrl !== 'function') {
       return;
     }
-    await openUrlAutomationWithRetries(device, clearUrl);
+    if (clearBetweenTestsEnabled()) {
+      await openUrlAutomationWithRetries(device, clearUrl);
+    }
     let launchedApp = false;
     const bid = typeof bundleId === 'string' && bundleId.trim() !== '' ? bundleId.trim() : undefined;
     if (bid != null && typeof device.launchApp === 'function') {
@@ -243,6 +271,16 @@ export function attachMobileRumAutomationHooks(testType: any): any {
     await resyncTrueCoverageSetForCurrentTest(device, testInfo);
     await openUrlAutomationWithRetries(device, flushUrl);
   });
+
+  if (typeof testType.afterAll === 'function' && suiteTeardownClearEnabled()) {
+    testType.afterAll(async ({ device }: MobileDeviceWorkerFixtures) => {
+      if (!device || typeof device.openUrl !== 'function') {
+        return;
+      }
+      await openUrlAutomationWithRetries(device, clearUrl);
+      await openUrlAutomationWithRetries(device, flushUrl);
+    });
+  }
 
   return testType;
 }

@@ -8,7 +8,7 @@
  * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
  * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
  *
- * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. End-of-test `v1/flush` uploads buffered RUM before the next test's `clear`. When the fixture key is `screen`, the `screen` object is proxied so likely WebSocket/mobilecli transport failures trigger an extra `v1/set` resync (disable with `TESTCHIMP_RUM_TRANSPORT_RESYNC=0`).
+ * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, hooks call `device.openUrl` to push CI JSON; integrate TestChimpRum (iOS/Android) URL handling in the app. By default, **`/v1/clear` is not sent** before each test (avoids a clear→set gap with null `ci-test-info` on RUM); each test still `SET`s CI, then `afterEach` runs `v1/flush`. Optional **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** registers `afterAll` to send `clear`+`flush` after the spec file. When the fixture key is `screen`, the `screen` object is proxied so likely WebSocket/mobilecli transport failures trigger an extra `v1/set` resync (disable with `TESTCHIMP_RUM_TRANSPORT_RESYNC=0`). Opt in to legacy clear-before-each-test with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`.
  */
 
 import * as path from 'path';

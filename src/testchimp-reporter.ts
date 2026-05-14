@@ -112,6 +112,8 @@ export class TestChimpReporter implements Reporter {
   private pendingOperationsByJobId: Map<string, Promise<any>[]> = new Map();
   /** Track platform per-test finalization so onEnd can await it even if Playwright doesn't. */
   private inFlightPlatformFinalizations: Set<Promise<void>> = new Set();
+  /** Idempotency: same journey execution id must not POST journey_execution_end twice (CI + platform + finally). */
+  private exploreChimpJourneyEndSentIds = new Set<string>();
 
   constructor(options: TestChimpReporterOptions = {}) {
     // Env wins over playwright.config reporter options so repair/platform runs can
@@ -463,7 +465,19 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
-    await this._onTestEndInner(test, result);
+    const testKey = this.getTestKey(test, result.retry);
+    const executionSnapshot = this.testExecutions.get(testKey) ?? null;
+    try {
+      await this._onTestEndInner(test, result);
+    } finally {
+      if (this.options.executionMode !== 'repair') {
+        try {
+          await this.ensureExploreChimpJourneyExecutionEnd(test, result, executionSnapshot);
+        } catch (e) {
+          console.error('[TestChimp] ExploreChimp journey_execution_end (onTestEnd finally guard) failed:', e);
+        }
+      }
+    }
   }
 
   private async _onTestEndInner(test: TestCase, result: TestResult): Promise<void> {
@@ -525,29 +539,18 @@ export class TestChimpReporter implements Reporter {
       if (isFinalAttempt && this.apiClient) {
         const finalizePromise = this.platformFinalizeTestEnd(test, result, execution);
         this.inFlightPlatformFinalizations.add(finalizePromise);
-        // #region agent log
-        fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H1',location:'testchimp-reporter.ts:onTestEnd',message:'platform_finalization_added',data:{inFlightFinalizations:this.inFlightPlatformFinalizations.size,pendingOps:this.countTotalPendingOperations(),testTitle:test.title},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         try {
           await finalizePromise;
         } finally {
           this.inFlightPlatformFinalizations.delete(finalizePromise);
-          // #region agent log
-          fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H1',location:'testchimp-reporter.ts:onTestEnd',message:'platform_finalization_removed',data:{inFlightFinalizations:this.inFlightPlatformFinalizations.size,pendingOps:this.countTotalPendingOperations(),testTitle:test.title},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
         }
       }
       return;
     }
 
-    // CI mode: skip non-final attempts if configured (still close ExploreChimp journey for this attempt)
+    // CI mode: skip non-final attempts if configured (journey_execution_end runs in onTestEnd finally).
     if (this.options.reportOnlyFinalAttempt && !isFinalAttempt) {
       console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
-      try {
-        await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution);
-      } catch (e) {
-        console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
-      }
       this.testExecutions.delete(testKey);
       return;
     }
@@ -586,35 +589,57 @@ export class TestChimpReporter implements Reporter {
       console.error(`[TestChimp] Failed to report test: ${test.title}`, error);
     }
 
-    try {
-      await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution);
-    } catch (e) {
-      console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
-    }
-
-    // Cleanup
+    // Cleanup (ExploreChimp journey_execution_end is invoked from onTestEnd finally).
     this.testExecutions.delete(testKey);
   }
 
   async onEnd(result: FullResult): Promise<void> {
     try {
       const pendingStart = this.countTotalPendingOperations();
-      // #region agent log
-      fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H1',location:'testchimp-reporter.ts:onEnd',message:'onEnd_start',data:{pendingStart,inFlightFinalizations:this.inFlightPlatformFinalizations.size,status:result.status},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (this.inFlightPlatformFinalizations.size > 0) {
         await Promise.allSettled([...this.inFlightPlatformFinalizations]);
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H2',location:'testchimp-reporter.ts:onEnd',message:'onEnd_after_finalizations',data:{pendingNow:this.countTotalPendingOperations(),inFlightFinalizations:this.inFlightPlatformFinalizations.size,status:result.status},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (pendingStart > 0) {
         console.log(`[TestChimp] Waiting for ${pendingStart} pending operations to complete...`);
       }
       await this.drainAllPendingBuckets();
-      // #region agent log
-      fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H2',location:'testchimp-reporter.ts:onEnd',message:'onEnd_after_drain',data:{pendingNow:this.countTotalPendingOperations(),inFlightFinalizations:this.inFlightPlatformFinalizations.size,status:result.status},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
+      // Best-effort: if a test never ran onTestEnd's finally (worker/process edge cases), still close open ExploreChimp journeys.
+      if (this.isEnabled && this.apiClient && isExploreChimpEnabled() && this.options.executionMode !== 'repair') {
+        const leftovers = [...this.testExecutions.entries()];
+        const marker = '_attempt_';
+        for (const [testKey, execution] of leftovers) {
+          const i = testKey.lastIndexOf(marker);
+          if (i <= 0) continue;
+          const retry = parseInt(testKey.slice(i + marker.length), 10);
+          if (!Number.isFinite(retry)) continue;
+          const baseId = testKey.slice(0, i);
+          if (baseId !== execution.testCase.id) continue;
+          const syntheticResult = {
+            duration: 0,
+            status: 'interrupted',
+            errors: [],
+            error: undefined,
+            retry,
+            startTime: new Date(),
+            annotations: [],
+            steps: [],
+            attachments: [],
+            stdout: [],
+            stderr: [],
+            retryErrors: [],
+            parallelIndex: 0,
+            workerIndex: 0,
+          } as TestResult;
+          try {
+            await this.ensureExploreChimpJourneyExecutionEnd(execution.testCase, syntheticResult, execution);
+          } catch (e) {
+            console.error(
+              `[TestChimp] onEnd: ExploreChimp journey_execution_end safety net failed for ${execution.testCase.title}:`,
+              e
+            );
+          }
+        }
+      }
       const suppressExplorationEnd = getEnvVar('TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END', '') === 'true';
       if (this.isEnabled && this.apiClient && isExploreChimpEnabled()) {
         const explorationId = this.batchInvocationId?.trim();
@@ -628,9 +653,6 @@ export class TestChimpReporter implements Reporter {
           console.log('[TestChimp] ExploreChimp exploration_end suppressed by TESTCHIMP_SUPPRESS_EXPLORECHIMP_EXPLORATION_END=true');
         }
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7372/ingest/cd562d50-3ebe-4497-8d8a-3bd6c50ca260',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'ff66f4'},body:JSON.stringify({sessionId:'ff66f4',runId:this.batchInvocationId,hypothesisId:'H2',location:'testchimp-reporter.ts:onEnd',message:'onEnd_done',data:{pendingNow:this.countTotalPendingOperations(),inFlightFinalizations:this.inFlightPlatformFinalizations.size,status:result.status},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (this.options.verbose) {
         console.log(`[TestChimp] Test run completed. Status: ${result.status}`);
         console.log(`[TestChimp] Batch invocation ID: ${this.batchInvocationId}`);
@@ -727,12 +749,6 @@ export class TestChimpReporter implements Reporter {
       }
     }
 
-    try {
-      await this.maybeExploreChimpJourneyExecutionEnd(test, result, execution, paths);
-    } catch (e) {
-      console.error(`[TestChimp] ExploreChimp journey_execution_end failed for ${test.title}:`, e);
-    }
-
     if (platformJobId && this.platformStepEndEnabled) {
       await this.drainPendingForJob(platformJobId);
     }
@@ -743,7 +759,7 @@ export class TestChimpReporter implements Reporter {
 
   /**
    * ExploreChimp execution job id: platform manifest job id when resolved, else stable hash of test id + batch + retry.
-   * Must match {@link maybeExploreChimpJourneyExecutionEnd} and the id used for smart test execution ingest.
+   * Must match {@link ensureExploreChimpJourneyExecutionEnd} and the id used for smart test execution ingest.
    */
   private exploreChimpJourneyExecutionJobId(
     test: TestCase,
@@ -769,14 +785,15 @@ export class TestChimpReporter implements Reporter {
 
   /**
    * Local ExploreChimp: persist step timeline and mark the journey execution completed.
+   * Only when {@link isExploreChimpEnabled} is true. Idempotent per journeyExecutionId.
    */
-  private async maybeExploreChimpJourneyExecutionEnd(
+  private async ensureExploreChimpJourneyExecutionEnd(
     test: TestCase,
     result: TestResult,
-    execution: TestExecutionState,
+    execution: TestExecutionState | null,
     pathsInput?: ReturnType<typeof derivePaths>
   ): Promise<void> {
-    if (!this.apiClient || !isExploreChimpEnabled()) {
+    if (!this.apiClient || !this.isEnabled || this.options.executionMode === 'repair' || !isExploreChimpEnabled()) {
       return;
     }
     const explorationId = this.batchInvocationId?.trim();
@@ -791,14 +808,31 @@ export class TestChimpReporter implements Reporter {
     if (!journeyExecutionId) {
       return;
     }
-    await this.apiClient.explorechimpJourneyExecutionEnd({
-      journeyId: test.id,
-      journeyExecutionId,
-      explorationId,
-      steps: execution.steps,
-      smartTestStatus: this.mapStatus(result.status),
-      errorMessage: result.error?.message,
-    });
+    if (this.exploreChimpJourneyEndSentIds.has(journeyExecutionId)) {
+      if (this.options.verbose) {
+        console.log(
+          `[TestChimp] ExploreChimp: journey_execution_end already sent for journeyExecutionId=${journeyExecutionId}, skipping duplicate`
+        );
+      }
+      return;
+    }
+    const steps = execution?.steps ?? [];
+    try {
+      await this.apiClient.explorechimpJourneyExecutionEnd({
+        journeyId: test.id,
+        journeyExecutionId,
+        explorationId,
+        steps,
+        smartTestStatus: this.mapStatus(result.status),
+        errorMessage: result.error?.message,
+      });
+      this.exploreChimpJourneyEndSentIds.add(journeyExecutionId);
+    } catch (e) {
+      console.error(
+        `[TestChimp] journey_execution_end FAILED journeyExecutionId=${journeyExecutionId} explorationId=${explorationId} test="${test.title}" retry=${result.retry}:`,
+        e
+      );
+    }
   }
 
   private pushPendingForJob(jobId: string, p: Promise<any>): void {

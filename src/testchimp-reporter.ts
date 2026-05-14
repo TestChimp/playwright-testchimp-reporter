@@ -152,10 +152,11 @@ export class TestChimpReporter implements Reporter {
     this.testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER', this.options.testsFolder) || 'tests';
     // In platform/repair mode reporter calls scriptservice (step_end/test_end or repair_* endpoints)
     // via TESTCHIMP_PLATFORM_BACKEND_URL; TESTCHIMP_BACKEND_URL stays as featureservice for ai-wright etc.
-    const backendUrl =
+    const backendUrlRaw =
       this.options.executionMode === 'platform' || this.options.executionMode === 'repair'
         ? getEnvVar('TESTCHIMP_PLATFORM_BACKEND_URL', this.options.platformBackendUrl) || getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io'
         : getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
+    const backendUrl = String(backendUrlRaw || '').trim() || 'https://featureservice.testchimp.io';
 
     // Update options with env var values for release/environment
     this.options.release = getEnvVar('TESTCHIMP_RELEASE', this.options.release) || '';
@@ -171,6 +172,18 @@ export class TestChimpReporter implements Reporter {
 
     this.apiClient = new TestChimpApiClient(backendUrl, apiKey || 'local-repair', projectId || '', this.options.verbose);
     this.isEnabled = true;
+
+    const envTcBackend = process.env.TESTCHIMP_BACKEND_URL;
+    const envEc = process.env.EXPLORECHIMP_ENABLED;
+    console.log(
+      `[TestChimp] ingest_diag onBegin pid=${process.pid} executionMode=${this.options.executionMode} ` +
+        `env_TESTCHIMP_BACKEND_URL=${envTcBackend === undefined ? '(undefined)' : JSON.stringify(envTcBackend)} ` +
+        `resolvedReporterBackendUrl=${JSON.stringify(backendUrl)} ` +
+        `axiosBaseURL=${JSON.stringify(this.apiClient.getBaseUrl())} ` +
+        `EXPLORECHIMP_ENABLED=${envEc === undefined ? '(undefined)' : JSON.stringify(envEc)} ` +
+        `isExploreChimpEnabled=${isExploreChimpEnabled()} ` +
+        `apiKeySet=${Boolean(apiKey?.trim())}`
+    );
 
     if (this.options.executionMode === 'platform') {
       this.jobManifest = this.loadJobManifest();
@@ -545,11 +558,17 @@ export class TestChimpReporter implements Reporter {
           this.inFlightPlatformFinalizations.delete(finalizePromise);
         }
       }
+      console.log(
+        `[TestChimp] ingest_diag skip_ingest reason=platform_mode test=${JSON.stringify(test.title)} isFinalAttempt=${isFinalAttempt}`
+      );
       return;
     }
 
     // CI mode: skip non-final attempts if configured (journey_execution_end runs in onTestEnd finally).
     if (this.options.reportOnlyFinalAttempt && !isFinalAttempt) {
+      console.log(
+        `[TestChimp] ingest_diag skip_ingest reason=non_final_attempt test=${JSON.stringify(test.title)} retry=${result.retry}`
+      );
       console.log(`[TestChimp] Skipping non-final attempt ${result.retry + 1} for: ${test.title}`);
       this.testExecutions.delete(testKey);
       return;
@@ -576,8 +595,18 @@ export class TestChimpReporter implements Reporter {
       console.log(`[TestChimp]   Steps with screenshots: ${stepsWithScreenshots.length}`);
     }
 
+    console.log(
+      `[TestChimp] ingest_diag before_ingest pid=${process.pid} test=${JSON.stringify(test.title)} ` +
+        `executionMode=${this.options.executionMode} axiosBaseURL=${JSON.stringify(this.apiClient.getBaseUrl())} ` +
+        `isExploreChimpEnabled=${isExploreChimpEnabled()} env_EXPLORECHIMP=${process.env.EXPLORECHIMP_ENABLED === undefined ? '(undefined)' : JSON.stringify(process.env.EXPLORECHIMP_ENABLED)}`
+    );
+
     try {
       const response = await this.apiClient.ingestExecutionReport(report);
+      console.log(
+        `[TestChimp] ingest_diag after_ingest_ok jobId=${response.jobId} testFound=${response.testFound} ` +
+          `baseUrl=${JSON.stringify(this.apiClient.getBaseUrl())}`
+      );
 
       if (this.options.verbose) {
         console.log(`[TestChimp] Reported: ${test.title} (jobId: ${response.jobId}, testFound: ${response.testFound})`);
@@ -586,7 +615,10 @@ export class TestChimpReporter implements Reporter {
         }
       }
     } catch (error) {
-      console.error(`[TestChimp] Failed to report test: ${test.title}`, error);
+      console.error(
+        `[TestChimp] ingest_diag after_ingest_error baseUrl=${JSON.stringify(this.apiClient.getBaseUrl())} test=${JSON.stringify(test.title)}`,
+        error
+      );
     }
 
     // Cleanup (ExploreChimp journey_execution_end is invoked from onTestEnd finally).

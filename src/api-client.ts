@@ -85,6 +85,12 @@ export class TestChimpApiClient {
     });
   }
 
+  /** Resolved axios base URL (ingest / upload_attachment / ExploreChimp server routes). */
+  getBaseUrl(): string {
+    const u = this.client.defaults.baseURL;
+    return typeof u === 'string' ? u : '';
+  }
+
   /**
    * Send a test execution report to the TestChimp backend
    */

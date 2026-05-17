@@ -12,7 +12,7 @@ const SET_OPEN_URL_MAX_ATTEMPTS = 3;
 const SET_OPEN_URL_RETRY_DELAY_MS = 400;
 
 /** Optional pause (ms) after the last `set` so the app can process the VIEW intent before the next Playwright step. */
-function resolvePostSetSettleMs(): number {
+export function resolvePostSetSettleMs(): number {
   const raw = process.env.TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS;
   if (raw === undefined || raw === '') return 100;
   const n = parseInt(raw, 10);
@@ -162,13 +162,6 @@ async function openUrlAutomationWithRetries(device: MobileDeviceNonNull, url: st
   );
 }
 
-async function pushSetUrlRepeats(device: MobileDeviceNonNull, url: string, repeats: number): Promise<void> {
-  const total = Math.max(1, repeats);
-  for (let i = 0; i < total; i++) {
-    await openUrlAutomationWithRetries(device, url);
-  }
-}
-
 let warnedMobileAutomationOnce = false;
 
 async function pushTrueCoverageSetForCurrentTest(
@@ -189,14 +182,18 @@ async function pushTrueCoverageSetForCurrentTest(
     }
     return false;
   }
-  await pushSetUrlRepeats(device, built, Math.max(1, repeatBurst));
+  const total = Math.max(1, repeatBurst);
+  for (let i = 0; i < total; i++) {
+    await openUrlAutomationWithRetries(device, built);
+  }
   return true;
 }
 
 /**
  * Wrap Mobilewright `test` so TrueCoverage SET runs in the `device` fixture immediately after
  * Mobilewright's own `launchApp`, before fixtures that depend on `device` (e.g. `screen`).
- * Used from {@link installTrueCoverage} when `testInfo.project.use.platform` is ios/android.
+ * Wired only from {@link installTrueCoverage} when `uiFixture: 'screen'`.
+ * No platform gate here (0.1.43 parity): SET runs whenever `device.openUrl` exists.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function extendMobileTestWithTrueCoverageDevice(test: any): any {
@@ -205,10 +202,6 @@ export function extendMobileTestWithTrueCoverageDevice(test: any): any {
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     device: async ({ device }: { device: any }, use: any, testInfo: TestInfoForCi) => {
-      if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
-        await use(device);
-        return;
-      }
       const d = device as MobileDeviceNonNull | undefined;
       if (!d || typeof d.openUrl !== 'function') {
         await use(device);
@@ -240,15 +233,14 @@ export async function resyncTrueCoverageSetForCurrentTest(
   if (!device || typeof device.openUrl !== 'function') {
     return false;
   }
-  const d = device as MobileDeviceNonNull;
   const { setUrlPrefix } = getMobileRumAutomationUrls();
-  return pushTrueCoverageSetForCurrentTest(d, testInfo, setUrlPrefix, 1);
+  return pushTrueCoverageSetForCurrentTest(device as MobileDeviceNonNull, testInfo, setUrlPrefix, 1);
 }
 
 /**
  * Register `afterEach` (and optionally `afterAll`) on the given Playwright `TestType` for mobile TrueCoverage.
  * **SET + settle + optional `/v1/clear`** run in the extended `device` fixture from {@link extendMobileTestWithTrueCoverageDevice}
- * (wired by `installTrueCoverage` when `testInfo.project.use.platform` is ios/android).
+ * (wired by `installTrueCoverage` when `uiFixture: 'screen'`).
  *
  * By default, **`/v1/clear` is not sent** between tests unless `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`
  * (handled in the device fixture). **`afterEach`:** trailing `SET` then `/v1/flush`. **`afterAll`:** only when

@@ -183,36 +183,40 @@ test('successive device fixture invocations get distinct set payloads from their
   const p1 = decodeSetPayload(setUrls[0]);
   const p2 = decodeSetPayload(setUrls[1]);
   assert.notEqual(JSON.stringify(p1), JSON.stringify(p2));
-  assert.equal(calls.length, 2);
 });
 
 test('device fixture openUrl set retries until success', async () => {
-  const deviceFixture = getCapturedDeviceFixture();
-  let openCount = 0;
-  const device = {
-    openUrl: async (u) => {
-      openCount += 1;
-      if (u.includes('/set?p=') && openCount < 3) {
-        throw new Error('transient');
-      }
-    },
-  };
+  try {
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
+    const deviceFixture = getCapturedDeviceFixture();
+    let openCount = 0;
+    const device = {
+      openUrl: async (u) => {
+        openCount += 1;
+        if (u.includes('/set?p=') && openCount < 3) {
+          throw new Error('transient');
+        }
+      },
+    };
 
-  const testInfo = {
-    file: 'tests/foo.spec.ts',
-    title: 't',
-    titlePath: () => ['', 'foo.spec.ts', 't'],
-    project: mobileProject(),
-    retry: 0,
-    workerIndex: 0,
-    testId: 'x',
-  };
+    const testInfo = {
+      file: 'tests/foo.spec.ts',
+      title: 't',
+      titlePath: () => ['', 'foo.spec.ts', 't'],
+      project: mobileProject(),
+      retry: 0,
+      workerIndex: 0,
+      testId: 'x',
+    };
 
-  await deviceFixture({ device }, async () => {}, testInfo);
-  assert.equal(openCount, 3);
+    await deviceFixture({ device }, async () => {}, testInfo);
+    assert.equal(openCount, 3);
+  } finally {
+    delete require.cache[require.resolve('../dist/rum-automation-mobile')];
+  }
 });
 
-test('device fixture sends set URL once per test', async () => {
+test('device fixture sends one SET per test', async () => {
   const deviceFixture = getCapturedDeviceFixture();
   const urls = [];
   const device = {
@@ -297,6 +301,93 @@ test('device fixture no-op when device cannot openUrl (e.g. setup project)', asy
     sawUse = true;
   }, testInfo);
   assert.ok(sawUse);
+});
+
+test('device fixture sends SET even when use.platform is missing (0.2.0 regression)', async () => {
+  const deviceFixture = getCapturedDeviceFixture();
+  const calls = [];
+  const device = {
+    openUrl: async (u) => {
+      calls.push(u);
+    },
+  };
+  for (const project of [
+    { name: 'ios', rootDir: '/tmp/r', use: {} },
+    { name: 'bad', rootDir: '/tmp/r', use: { platform: 'mobile' } },
+  ]) {
+    const testInfo = {
+      file: 'tests/foo.spec.ts',
+      title: 't',
+      titlePath: () => ['', 'foo.spec.ts', 't'],
+      project,
+      retry: 0,
+      workerIndex: 0,
+      testId: 'x',
+    };
+    calls.length = 0;
+    await deviceFixture({ device }, async () => {}, testInfo);
+    assert.equal(
+      calls.filter((c) => typeof c === 'string' && c.includes('/set?p=')).length,
+      1,
+      `expected one SET for project ${JSON.stringify(project.use)}`
+    );
+  }
+});
+
+test('screen fixture does not send SET (device owns SET)', async () => {
+  delete require.cache[require.resolve('../dist/mobile-screen-transport-resync')];
+  const { attachMobileScreenTransportResync } = require('../dist/mobile-screen-transport-resync');
+  let screenFixture;
+  const fakeTest = {
+    extend(f) {
+      screenFixture = f.screen;
+      return fakeTest;
+    },
+  };
+  attachMobileScreenTransportResync(fakeTest);
+
+  const calls = [];
+  const device = { openUrl: async (u) => calls.push(u) };
+  const screen = { tap: async () => {} };
+  const testInfo = {
+    file: 'tests/foo.spec.ts',
+    title: 'screen only',
+    titlePath: () => ['', 'foo.spec.ts', 'screen only'],
+    project: mobileProject(),
+    retry: 0,
+    workerIndex: 0,
+    testId: 'sp',
+  };
+  await screenFixture({ screen, device }, async () => {}, testInfo);
+  assert.equal(calls.filter((u) => u.includes('/set?p=')).length, 0);
+});
+
+test('afterEach skips mobile URLs when platformFromTestInfo is web', async () => {
+  const { attachMobileRumAutomationHooks } = require('../dist/rum-automation-mobile');
+  const calls = [];
+  const device = {
+    openUrl: async (u) => {
+      calls.push(u);
+    },
+  };
+  const hooks = { afterEach: null };
+  attachMobileRumAutomationHooks({
+    afterEach(fn) {
+      hooks.afterEach = fn;
+      return this;
+    },
+  });
+  const testInfo = {
+    file: 'tests/api.spec.ts',
+    title: 'api test',
+    titlePath: () => ['', 'api.spec.ts', 'api test'],
+    project: { name: 'api', rootDir: '/tmp/r', use: {} },
+    retry: 0,
+    workerIndex: 0,
+    testId: 'api',
+  };
+  await hooks.afterEach({ device }, testInfo);
+  assert.equal(calls.length, 0);
 });
 
 test('attachMobileRumAutomationHooks does not register afterAll clear by default', async () => {

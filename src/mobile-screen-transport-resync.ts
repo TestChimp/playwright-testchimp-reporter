@@ -1,5 +1,4 @@
 import type { TestInfoForCi } from './ci-test-info';
-import { isMobilePlatform, platformFromTestInfo } from './project-type';
 import {
   isLikelyMobileTransportFailure,
   resyncTrueCoverageSetForCurrentTest,
@@ -80,10 +79,6 @@ export function attachMobileScreenTransportResync(testType: any): any {
   return testType.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     screen: async ({ screen, device }: { screen: unknown; device?: unknown }, use: any, testInfo: TestInfoForCi) => {
-      if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
-        await use(screen);
-        return;
-      }
       const ctx: ScreenTransportCtx = { device, testInfo };
       await use(wrapScreenForTransportResync(screen, ctx));
     },

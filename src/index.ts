@@ -47,6 +47,7 @@ export {
   getMobileRumAutomationUrls,
   isLikelyMobileTransportFailure,
   resyncTrueCoverageSetForCurrentTest,
+  resolvePostSetSettleMs,
   transportResyncDisabled,
   type MobileDeviceWorkerFixtures,
   type MobileRumAutomationUrls,

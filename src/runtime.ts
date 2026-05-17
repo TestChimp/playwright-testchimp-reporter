@@ -2,13 +2,8 @@
  * TestChimp Playwright runtime: TrueCoverage CI metadata (`installTrueCoverage` / `installTestChimp`) and,
  * when `EXPLORECHIMP_ENABLED`, ExploreChimp local analytics (same installs — no separate ExploreChimp install).
  *
- * Prefer `installTrueCoverage(mergedTest)` (or `installTestChimp`) on the same `test` object your specs use.
- * Screen/state markers: `test('…', async ({ markScreenState }) => { await markScreenState('Screen', 'state'); })`.
- * The same `markScreenState` fixture records a runner `test.step` when ExploreChimp is off, and runs ExploreChimp analytics when it is on.
- * Side-effect `import '@testchimp/playwright/runtime'` registers on the active test runtime:
- * default `@playwright/test`, or `@mobilewright/test` when `TESTCHIMP_PROJECT_TYPE=ios|android`.
- *
- * Mobile TrueCoverage: when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, `installTrueCoverage` extends the Mobilewright **`device`** fixture so **`SET`** runs right after Mobilewright’s `launchApp`, before `screen` (see `extendMobileTestWithTrueCoverageDevice`). **`afterEach`** still sends a trailing `SET` + `v1/flush`. Integrate TestChimpRum URL handling in the app. By default, **`/v1/clear` is not sent** between tests (opt in with `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`, handled in the `device` fixture). Optional **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** registers `afterAll` `clear`+`flush`. When the fixture key is `screen`, `screen` is proxied for transport-failure `SET` resync (`TESTCHIMP_RUM_TRANSPORT_RESYNC=0` to disable).
+ * Platform branching uses Mobilewright `projects[].use.platform` (ios/android). When omitted, web behaviour applies.
+ * Pass `{ uiFixture: 'screen' }` when wrapping `@mobilewright/test`; default `page` for `@playwright/test`.
  */
 
 import * as path from 'path';
@@ -19,26 +14,59 @@ import {
   runExploreChimpMarkScreenState,
   isExploreChimpEnabled,
 } from './explorechimp';
-import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from './project-type';
+import { isMobilePlatform, platformFromTestInfo, type FixtureKey } from './project-type';
 import { attachMobileScreenTransportResync } from './mobile-screen-transport-resync';
 import {
   attachMobileRumAutomationHooks,
   extendMobileTestWithTrueCoverageDevice,
 } from './rum-automation-mobile';
 
-/** Resolve test runtime module from the consumer project (web: Playwright, mobile: Mobilewright). */
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
-const fixtureKey = getFixtureKey();
-const mobileProject = isMobileProjectType();
-const runtimeModuleName = getTestRuntimeModuleName();
 
 /** Bound screen/state marker from the `markScreenState` Playwright fixture. */
 export type MarkScreenStateFixture = (screenName: string, stateName?: string) => Promise<void>;
 
+export type InstallTestChimpOptions = {
+  /** `screen` for `@mobilewright/test` barrels; `page` for `@playwright/test` (default). */
+  uiFixture?: FixtureKey;
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function addMarkScreenStateFixture(test: any): any {
-  // Playwright 1.59+ requires the fixture worker's first parameter to use object destructuring
-  // (e.g. `{ page }`), not a single positional `fixtures` object.
+function extendWebTrueCoveragePage(test: any): any {
+  return test.extend({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    page: async ({ page }: { page: any }, use: any, testInfo: any) => {
+      if (isMobilePlatform(platformFromTestInfo(testInfo))) {
+        await use(page);
+        return;
+      }
+
+      const project = testInfo.project as { rootDir?: string };
+      const projectRootDir = project.rootDir ?? process.cwd();
+      const jsonString = buildCiTestInfoJson(testInfo, projectRootDir);
+
+      await page.addInitScript(
+        (info: string) => {
+          (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+        },
+        jsonString
+      );
+
+      try {
+        await page.evaluate((info: string) => {
+          (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
+        }, jsonString);
+      } catch {
+        // Ignore: page may be closed or not ready yet.
+      }
+
+      await use(page);
+    },
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function addMarkScreenStateFixture(test: any, uiFixture: FixtureKey): any {
   const buildMarkFn = (fixtureTarget: unknown): MarkScreenStateFixture => {
     return async (screenName: string, stateName?: string) => {
       if (isExploreChimpEnabled()) {
@@ -60,10 +88,20 @@ function addMarkScreenStateFixture(test: any): any {
     };
   };
 
-  if (fixtureKey === 'screen') {
+  if (uiFixture === 'screen') {
     return test.extend({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      markScreenState: async ({ screen }: { screen: unknown }, use: any) => {
+      markScreenState: async ({ screen }: { screen: unknown }, use: any, testInfo: any) => {
+        const platform = platformFromTestInfo(testInfo);
+        if (!isMobilePlatform(platform)) {
+          await use(buildMarkFn(undefined));
+          return;
+        }
+        if (screen === undefined) {
+          throw new Error(
+            '[TestChimp] Missing "screen" fixture. Use @mobilewright/test in fixtures/index.js and set projects[].use.platform to ios or android on mobile UI projects.'
+          );
+        }
         await use(buildMarkFn(screen));
       },
     });
@@ -71,7 +109,17 @@ function addMarkScreenStateFixture(test: any): any {
 
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    markScreenState: async ({ page }: { page: unknown }, use: any) => {
+    markScreenState: async ({ page }: { page: unknown }, use: any, testInfo: any) => {
+      const platform = platformFromTestInfo(testInfo);
+      if (isMobilePlatform(platform)) {
+        await use(buildMarkFn(undefined));
+        return;
+      }
+      if (page === undefined) {
+        throw new Error(
+          '[TestChimp] Missing "page" fixture. Use @playwright/test in fixtures/index.js for web and API specs.'
+        );
+      }
       await use(buildMarkFn(page));
     },
   });
@@ -79,53 +127,37 @@ function addMarkScreenStateFixture(test: any): any {
 
 /**
  * Register TrueCoverage CI metadata injection on the given Playwright `test` object
- * (including `mergeTests(...)` output). When `EXPLORECHIMP_ENABLED`, also applies ExploreChimp page wiring.
+ * (including `mergeTests(...)` output). When `EXPLORECHIMP_ENABLED`, also applies ExploreChimp wiring.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function installTrueCoverage(test: any): any {
-  const withCi = mobileProject
-    ? extendMobileTestWithTrueCoverageDevice(test)
-    : test.extend({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        page: async ({ page }: { page: any }, use: any, testInfo: any) => {
-          const project = testInfo.project as { rootDir?: string };
-          const projectRootDir = project.rootDir ?? process.cwd();
-          const jsonString = buildCiTestInfoJson(testInfo, projectRootDir);
+export function installTrueCoverage(test: any, options: InstallTestChimpOptions = {}): any {
+  const uiFixture = options.uiFixture ?? 'page';
 
-          await page.addInitScript(
-            (info: string) => {
-              (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
-            },
-            jsonString
-          );
+  // Web (@playwright/test): only extend `page` + optional ExploreChimp — never touch `device` / mobile hooks.
+  let chain = test;
+  if (uiFixture === 'screen') {
+    chain = extendMobileTestWithTrueCoverageDevice(chain);
+  }
+  if (uiFixture === 'page') {
+    chain = extendWebTrueCoveragePage(chain);
+  }
 
-          try {
-            await page.evaluate((info: string) => {
-              (globalThis as unknown as { __TC_CI_TEST_INFO?: string }).__TC_CI_TEST_INFO = info;
-            }, jsonString);
-          } catch {
-            // Ignore: page may be closed or not ready yet.
-          }
+  const withMark = addMarkScreenStateFixture(chain, uiFixture);
+  let result: typeof withMark = withMark;
 
-          await use(page);
-        },
-      });
-
-  const withMark = addMarkScreenStateFixture(withCi);
-  let chain: typeof withMark = withMark;
   if (isExploreChimpEnabled()) {
-    chain = applyExploreChimpFixture(withMark);
+    result = applyExploreChimpFixture(withMark, uiFixture);
   }
-  if (mobileProject) {
-    chain = attachMobileRumAutomationHooks(chain);
-    if (fixtureKey === 'screen') {
-      chain = attachMobileScreenTransportResync(chain);
-    }
+
+  if (uiFixture === 'screen') {
+    result = attachMobileRumAutomationHooks(result);
+    result = attachMobileScreenTransportResync(result);
   }
-  return chain;
+
+  return result;
 }
 
-/** Same behavior as {@link installTrueCoverage} — umbrella name for TrueCoverage + ExploreChimp (via env). */
+/** Same behaviour as {@link installTrueCoverage} — umbrella name for TrueCoverage + ExploreChimp (via env). */
 export const installTestChimp = installTrueCoverage;
 
 export { isExploreChimpEnabled };
@@ -144,14 +176,9 @@ async function runTraceOnlyMarkScreenState(screenName: string, stateName?: strin
       : DEFAULT_SCREEN_STATE;
   const title = `ScreenState: ${screen} | ${state}`;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { test } = pwRequire(runtimeModuleName) as any;
+  const { test } = pwRequire('@playwright/test') as any;
   await test.step(title, async () => {
     // eslint-disable-next-line no-console
     console.log(`reached ${screen} | ${state}`);
   });
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { test: rootTest } = pwRequire(runtimeModuleName) as any;
-
-installTrueCoverage(rootTest);

@@ -20,6 +20,11 @@ function decodeSetPayload(url) {
   return JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
 }
 
+/** Mobilewright UI project mock — platform comes from projects[].use.platform. */
+function mobileProject(extra = {}) {
+  return { name: 'mobile', rootDir: '/tmp/r', use: { platform: 'ios' }, ...extra };
+}
+
 test('getMobileRumAutomationUrls includes default flush URL', () => {
   const { getMobileRumAutomationUrls } = require('../dist/rum-automation-mobile');
   const urls = getMobileRumAutomationUrls();
@@ -70,7 +75,7 @@ test('attachMobileRumAutomationHooks registers afterEach only (SET is device fix
     file: 'tests/foo.spec.ts',
     title: 'my test',
     titlePath: () => ['', 'foo.spec.ts', 'my test'],
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 1,
     testId: 'abc',
@@ -102,7 +107,7 @@ test('afterEach sends flush after trailing set', async () => {
     file: 'tests/foo.spec.ts',
     title: 't',
     titlePath: () => ['', 'foo.spec.ts', 't'],
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 0,
     testId: 'flush-order',
@@ -127,7 +132,7 @@ test('device fixture does not call launchApp (Mobilewright owns launch)', async 
     file: 'tests/foo.spec.ts',
     title: 't',
     titlePath: () => ['', 'foo.spec.ts', 't'],
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 0,
     testId: 'id1',
@@ -156,7 +161,7 @@ test('successive device fixture invocations get distinct set payloads from their
 
   const base = {
     file: 'tests/foo.spec.ts',
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 0,
     testId: 'same',
@@ -197,7 +202,7 @@ test('device fixture openUrl set retries until success', async () => {
     file: 'tests/foo.spec.ts',
     title: 't',
     titlePath: () => ['', 'foo.spec.ts', 't'],
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 0,
     testId: 'x',
@@ -220,7 +225,7 @@ test('device fixture sends set URL once per test', async () => {
     file: 'tests/foo.spec.ts',
     title: 't',
     titlePath: () => ['', 'foo.spec.ts', 't'],
-    project: { name: 'mobile', rootDir: '/tmp/r' },
+    project: mobileProject(),
     retry: 0,
     workerIndex: 0,
     testId: 'x',
@@ -259,7 +264,7 @@ test('openUrl respects OPEN_URL_TIMEOUT_MS and does not hang forever (device fix
       file: 'tests/foo.spec.ts',
       title: 't',
       titlePath: () => ['', 'foo.spec.ts', 't'],
-      project: { name: 'mobile', rootDir: '/tmp/r' },
+      project: mobileProject(),
       retry: 0,
       workerIndex: 0,
       testId: 'timeout',
@@ -361,7 +366,7 @@ test('legacy: device fixture clears first when TESTCHIMP_RUM_AUTOMATION_CLEAR_BE
       file: 'tests/foo.spec.ts',
       title: 'my test',
       titlePath: () => ['', 'foo.spec.ts', 'my test'],
-      project: { name: 'mobile', rootDir: '/tmp/r' },
+      project: mobileProject(),
       retry: 0,
       workerIndex: 1,
       testId: 'abc',

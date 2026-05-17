@@ -1,4 +1,5 @@
 import { buildCiTestInfoJson, type TestInfoForCi } from './ci-test-info';
+import { isMobilePlatform, platformFromTestInfo } from './project-type';
 
 const DEFAULT_SET_PREFIX = 'testchimp-rum://truecoverage/v1/set?p=';
 const DEFAULT_CLEAR_URL = 'testchimp-rum://truecoverage/v1/clear';
@@ -195,7 +196,7 @@ async function pushTrueCoverageSetForCurrentTest(
 /**
  * Wrap Mobilewright `test` so TrueCoverage SET runs in the `device` fixture immediately after
  * Mobilewright's own `launchApp`, before fixtures that depend on `device` (e.g. `screen`).
- * Used from {@link installTrueCoverage} when `TESTCHIMP_PROJECT_TYPE` is ios/android — not required for direct import by consumers.
+ * Used from {@link installTrueCoverage} when `testInfo.project.use.platform` is ios/android.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function extendMobileTestWithTrueCoverageDevice(test: any): any {
@@ -204,6 +205,10 @@ export function extendMobileTestWithTrueCoverageDevice(test: any): any {
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     device: async ({ device }: { device: any }, use: any, testInfo: TestInfoForCi) => {
+      if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
+        await use(device);
+        return;
+      }
       const d = device as MobileDeviceNonNull | undefined;
       if (!d || typeof d.openUrl !== 'function') {
         await use(device);
@@ -243,7 +248,7 @@ export async function resyncTrueCoverageSetForCurrentTest(
 /**
  * Register `afterEach` (and optionally `afterAll`) on the given Playwright `TestType` for mobile TrueCoverage.
  * **SET + settle + optional `/v1/clear`** run in the extended `device` fixture from {@link extendMobileTestWithTrueCoverageDevice}
- * (wired by `installTrueCoverage` when `TESTCHIMP_PROJECT_TYPE` is ios/android).
+ * (wired by `installTrueCoverage` when `testInfo.project.use.platform` is ios/android).
  *
  * By default, **`/v1/clear` is not sent** between tests unless `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`
  * (handled in the device fixture). **`afterEach`:** trailing `SET` then `/v1/flush`. **`afterAll`:** only when
@@ -254,6 +259,9 @@ export function attachMobileRumAutomationHooks(testType: any): any {
   const { flushUrl, clearUrl } = getMobileRumAutomationUrls();
 
   testType.afterEach(async ({ device }: MobileDeviceWorkerFixtures, testInfo: TestInfoForCi) => {
+    if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
+      return;
+    }
     if (!device || typeof device.openUrl !== 'function') {
       return;
     }

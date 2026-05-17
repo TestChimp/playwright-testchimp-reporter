@@ -41,9 +41,7 @@ npm install @testchimp/playwright
 
 Peer dependency: `@playwright/test` (e.g. `>=1.40.0`) for web projects, and `mobilewright` for mobile projects.
 
-Runtime switching is controlled by `TESTCHIMP_PROJECT_TYPE`:
-- `web` or unset: uses Playwright fixture `page` (default, backward-compatible).
-- `ios` / `android` (case-insensitive): uses Mobilewright fixture `screen`.
+Platform is determined per test from Mobilewright `projects[].use.platform` (`ios` / `android`; omitted = web), with fallback to `testInfo.annotations` (`device.platform`, Mobilewright 0.0.36+). Requires **mobilewright >= 0.0.37** for multi-project `installApps`. Pass `installTestChimp(base, { uiFixture: 'screen' })` when wrapping `@mobilewright/test`; default `page` for `@playwright/test` (web path never touches `device` fixtures).
 
 ---
 
@@ -75,20 +73,20 @@ export default defineConfig({
 For TrueCoverage, **wrap and re-export** `test` from your fixtures entry (recommended):
 
 ```ts
-import { test as base } from '@playwright/test'; // or '@mobilewright/test'
+import { test as base } from '@playwright/test';
 import { installTestChimp } from '@testchimp/playwright/runtime';
-export const test = installTestChimp(base);
+export const test = installTestChimp(base); // default uiFixture: 'page'
+
+// Mobilewright fixtures barrel:
+// import { test as base } from '@mobilewright/test';
+// export const test = installTestChimp(base, { uiFixture: 'screen' });
 ```
 
 A side-effect-only `import '@testchimp/playwright/runtime'` does not apply extended fixtures or mobile hooks; the returned `TestType` from `installTestChimp` must be what your specs import.
 
 **Web:** the runtime injects `__TC_CI_TEST_INFO` on the `page` fixture for `@testchimp/rum-js`.
 
-**Mobile (iOS/Android):** set `TESTCHIMP_PROJECT_TYPE=ios` or `android`. The runtime extends the Mobilewright **`device`** fixture so **`SET`** runs right after Mobilewright’s **`launchApp`** (via `device.openUrl`), before **`screen`** and the test body; **`afterEach`** still sends a trailing **`SET`** + **`v1/flush`**. By default **no** `/v1/clear` between tests—each test **`SET`s** new CI so RUM avoids a clear→set gap with missing `ci_test_info`. Integrate **TestChimpRum** for that platform (see `testchimp-rum-ios` / `testchimp-rum-android` READMEs): URL scheme / intent filter for `testchimp-rum://truecoverage/...`.
-
-```bash
-export TESTCHIMP_PROJECT_TYPE=ios  # or android
-```
+**Mobile (iOS/Android):** set `use.platform` to `ios` or `android` on Mobilewright UI projects and use `installTestChimp(base, { uiFixture: 'screen' })`. The runtime extends the Mobilewright **`device`** fixture so **`SET`** runs right after Mobilewright’s **`launchApp`** (via `device.openUrl`), before **`screen`** and the test body; **`afterEach`** still sends a trailing **`SET`** + **`v1/flush`**. By default **no** `/v1/clear` between tests—each test **`SET`s** new CI so RUM avoids a clear→set gap with missing `ci_test_info`. Integrate **TestChimpRum** for that platform (see `testchimp-rum-ios` / `testchimp-rum-android` READMEs): URL scheme / intent filter for `testchimp-rum://truecoverage/...`.
 
 Optional URL overrides: `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX`, `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL`, `TESTCHIMP_RUM_AUTOMATION_FLUSH_URL` (defaults match the native SDKs). Legacy: set **`TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`** to send `/v1/clear` before each test’s `SET` again.
 
@@ -103,7 +101,6 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
-| `TESTCHIMP_PROJECT_TYPE` | No | Fixture/runtime switch: `web` (default) or mobile (`ios`/`android`). Mobile mode always pushes CI JSON via `device.openUrl` (TrueCoverage). |
 | `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX` | No | Override set-URL prefix (default `testchimp-rum://truecoverage/v1/set?p=` + base64url JSON). |
 | `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL` | No | Override clear URL (default `testchimp-rum://truecoverage/v1/clear`). |
 | `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS` | No | When `1`/`true`/`yes`, each test’s **`device`** fixture sends `/v1/clear` before `SET` (legacy). **Default off** so CI stays set until overwritten, avoiding null `ci_test_info` on RUM during the clear→set window. |
@@ -168,7 +165,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
 - **Subpath**: `@testchimp/playwright/runtime` — use `installTestChimp(test)` on your runner’s `test` object (see Quick start).
   - **Web:** extends `page` to set `__TC_CI_TEST_INFO` for `@testchimp/rum-js`.
-  - **Mobile:** when `TESTCHIMP_PROJECT_TYPE` is `ios`/`android`, registers hooks that call `device.openUrl` for the iOS Swift SDK and Android Kotlin SDK (same URL contract). Default: **SET-only** between tests; **no** automatic `afterAll` clear (CI clears on SDK TTL or opt-in `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`).
+  - **Mobile:** when `projects[].use.platform` is `ios`/`android`, registers hooks that call `device.openUrl` for the iOS Swift SDK and Android Kotlin SDK (same URL contract). Default: **SET-only** between tests; **no** automatic `afterAll` clear (CI clears on SDK TTL or opt-in `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`).
 - **Named**: `buildCiTestInfoJson`, `attachMobileRumAutomationHooks`, `extendMobileTestWithTrueCoverageDevice`, `clearBetweenTestsEnabled`, `suiteTeardownClearEnabled`, `resyncTrueCoverageSetForCurrentTest`, `isLikelyMobileTransportFailure`, etc., for advanced wiring.
 
 ---
@@ -185,7 +182,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
 
 - **RUM events not linked to tests / missing `ci_test_info` (mobile)**  
-  Use `export const test = installTestChimp(...)` from a fixtures barrel and import `test` from there. Set `TESTCHIMP_PROJECT_TYPE=android|ios` and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  
+  Use `export const test = installTestChimp(base, { uiFixture: 'screen' })` from a Mobilewright fixtures barrel and import `test` from there. Set `use.platform` on Mobilewright projects and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  
   **Android SDK:** use **testchimp-rum-android ≥ 0.1.7** (automation **`/v1/set`** on caller thread; **`/v1/flush`** drains buffered events when the runner opens that URL).  
   **Runner:** `installTestChimp` extends the **`device`** fixture so **`SET`** runs in the same scope as Mobilewright’s **`launchApp`** (before **`screen`**), then settle; **`afterEach`** sends a trailing **`set` + `v1/flush`**. **Does not** send `/v1/clear` between tests by default (avoids null `ci-test-info`). Opt in to legacy clear-first with **`TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`**, or **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** for `afterAll` `clear`+`flush` after each spec file. **Re-sends `set` after likely transport failures** on `screen` API calls. Disable resync with **`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`**. Tune **`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`** (0–500, default **100** ms). Optional URL overrides: **`TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`**. If **`device.openUrl`** wedges (mobilecli), set **`TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS`** (default **25000**, clamp **100–120000**).
 

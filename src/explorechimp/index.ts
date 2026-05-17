@@ -59,7 +59,12 @@ import {
 import { cleanHtml } from './clean-html';
 import { compactAxeResultsForUpload } from './axe-compact';
 import { registerExploreChimpAnalyticsStepScreenState } from './analytics-step-screen-state-registry';
-import { getFixtureKey, getTestRuntimeModuleName, isMobileProjectType } from '../project-type';
+import {
+  isMobilePlatform,
+  platformFromTestInfo,
+  type FixtureKey,
+  type RunPlatform,
+} from '../project-type';
 
 export { DataSourceEnum };
 export type {
@@ -92,7 +97,10 @@ export type {
 } from './agents-explorechimp-json';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
-const fixtureKey = getFixtureKey();
+
+function testRuntimeModuleForPlatform(platform: RunPlatform): string {
+  return isMobilePlatform(platform) ? '@mobilewright/test' : '@playwright/test';
+}
 
 const K_META = '__testchimpExploreChimpMeta';
 const K_BUF = '__testchimpExploreChimpBuffers';
@@ -122,6 +130,8 @@ export interface ExploreChimpPageMeta {
   /** Playwright testInfo.retry — used with testId for stable analytics step ids. */
   testRetry: number;
   projectRootDir: string;
+  /** From `testInfo.project.use.platform` (ios/android) or web when omitted. */
+  platform: RunPlatform;
 }
 
 function exploreChimpAnalyticsStepId(meta: ExploreChimpPageMeta, stepTitle: string): string {
@@ -380,13 +390,15 @@ export function attachExploreChimpInstrumentation(
 async function runExploreChimpPageOrScreenFixture(
   target: ExploreChimpTarget | undefined,
   use: any,
-  testInfo: any
+  testInfo: any,
+  uiFixture: FixtureKey
 ): Promise<void> {
   if (!target) {
     throw new Error(
-      `[ExploreChimp] Missing "${fixtureKey}" fixture. Check TESTCHIMP_PROJECT_TYPE and runner fixture wiring.`
+      `[ExploreChimp] Missing "${uiFixture}" fixture. Use installTestChimp with uiFixture matching your runner (@playwright/test → page, @mobilewright/test → screen).`
     );
   }
+  const platform = platformFromTestInfo(testInfo);
   if (!isExploreChimpEnabled()) {
     await use(target);
     return;
@@ -442,6 +454,7 @@ async function runExploreChimpPageOrScreenFixture(
     },
     testRetry: typeof testInfo.retry === 'number' ? testInfo.retry : 0,
     projectRootDir,
+    platform,
   };
   (target as PageAugmented)[K_META] = meta;
 
@@ -457,7 +470,7 @@ async function runExploreChimpPageOrScreenFixture(
     recordNetwork: !!(wantNetwork && regex),
     networkRegex: regex,
   });
-  if (sources.has('METRICS') && !isMobileProjectType()) {
+  if (sources.has('METRICS') && !isMobilePlatform(platform)) {
     await installExploreChimpPerfMetricsObservers(target, parseExploreChimpLongTaskThresholdMs());
   }
 
@@ -465,25 +478,25 @@ async function runExploreChimpPageOrScreenFixture(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function applyExploreChimpPageFixture(test: any): any {
-  if (fixtureKey === 'screen') {
+export function applyExploreChimpFixture(test: any, uiFixture: FixtureKey): any {
+  if (uiFixture === 'screen') {
     return test.extend({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       screen: async ({ screen }: { screen: any }, use: any, testInfo: any) => {
-        await runExploreChimpPageOrScreenFixture(screen, use, testInfo);
+        await runExploreChimpPageOrScreenFixture(screen, use, testInfo, uiFixture);
       },
     });
   }
   return test.extend({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     page: async ({ page }: { page: any }, use: any, testInfo: any) => {
-      await runExploreChimpPageOrScreenFixture(page, use, testInfo);
+      await runExploreChimpPageOrScreenFixture(page, use, testInfo, uiFixture);
     },
   });
 }
 
-// Backward-compatible export name for internal callers.
-export const applyExploreChimpFixture = applyExploreChimpPageFixture;
+/** @deprecated Use {@link applyExploreChimpFixture} */
+export const applyExploreChimpPageFixture = applyExploreChimpFixture;
 
 function getMeta(page: ExploreChimpTarget): ExploreChimpPageMeta | undefined {
   return (page as PageAugmented)[K_META] as ExploreChimpPageMeta | undefined;
@@ -506,12 +519,12 @@ export async function runExploreChimpMarkScreenState(
       ? String(stateName).trim()
       : 'default';
 
-  const { test } = pwRequire(getTestRuntimeModuleName()) as {
-    test: { step: (name: string, fn: () => Promise<void>) => Promise<void> };
-  };
-
   const sources = parseExploreChimpSources();
   const meta = getMeta(target);
+  const platform = meta?.platform ?? 'web';
+  const { test } = pwRequire(testRuntimeModuleForPlatform(platform)) as {
+    test: { step: (name: string, fn: () => Promise<void>) => Promise<void> };
+  };
   const explorationId = readTestChimpBatchInvocationId(meta?.projectRootDir ?? process.cwd());
   const apiKey = process.env.TESTCHIMP_API_KEY?.trim() || '';
 
@@ -595,7 +608,7 @@ export async function runExploreChimpMarkScreenState(
       }
     }
 
-    if (sources.has('METRICS') && !isMobileProjectType()) {
+    if (sources.has('METRICS') && meta && !isMobilePlatform(meta.platform)) {
       const metricsTitle = `Analyzing Metrics for Screen-state ${prior.name} | ${prior.state}`;
       let metricsPayload: MetricsPayload | null = null;
       try {
@@ -655,7 +668,7 @@ export async function runExploreChimpMarkScreenState(
     });
   }
 
-  if (sources.has('DOM') && !isMobileProjectType()) {
+  if (sources.has('DOM') && meta && !isMobilePlatform(meta.platform)) {
     const domTitle = `Analyzing DOM for Screen-state ${current.name} | ${current.state}`;
     registerExploreChimpAnalyticsStepScreenState(exploreChimpAnalyticsStepId(meta, domTitle), current);
     await test.step(domTitle, async () => {

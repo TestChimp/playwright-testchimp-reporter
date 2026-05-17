@@ -18,7 +18,7 @@ export interface TestInfoLike {
   file: string;
   title: string;
   titlePath?: () => string[];
-  project?: { name?: string };
+  project?: { name?: string; use?: unknown };
 }
 
 /**

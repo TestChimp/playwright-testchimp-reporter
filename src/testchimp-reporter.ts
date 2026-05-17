@@ -22,6 +22,7 @@ import {
   RetryAttemptLog,
   JobManifestEntry
 } from './types';
+import { buildExecutionDeviceContext } from './execution-context';
 import {
   derivePaths,
   generateStepId,
@@ -950,6 +951,7 @@ export class TestChimpReporter implements Reporter {
     // Map Playwright status to SmartTestExecutionStatus
     const status = this.mapStatus(result.status);
 
+    const executionContext = buildExecutionDeviceContext(test);
     const report: SmartTestExecutionReport = {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
@@ -964,12 +966,14 @@ export class TestChimpReporter implements Reporter {
         status,
         error: result.error?.message,
         pwError: this.toPlaywrightError(result.error),
-        scenarioCoverageResults: [] // Backend will populate if empty
+        scenarioCoverageResults: [], // Backend will populate if empty
+        executionContext,
       },
       startedAtMillis: execution.startedAt,
       completedAtMillis: Date.now(),
       branchName,
-      branchId: branchIdValid
+      branchId: branchIdValid,
+      executionContext,
     };
     const exploreChimpJobId = this.exploreChimpJourneyExecutionJobId(test, result, paths);
     if (exploreChimpJobId) {

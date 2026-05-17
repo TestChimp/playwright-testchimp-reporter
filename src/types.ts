@@ -73,6 +73,14 @@ export interface RetryAttemptLog {
   error?: string;
 }
 
+export interface ExecutionDeviceContext {
+  platform?: number;
+  deviceFamily?: string;
+  osVersion?: string;
+  screenResolution?: string;
+  screenOrientation?: number;
+}
+
 export interface SmartTestExecutionJobDetail {
   testName: string;
   steps: SmartTestExecutionStep[];
@@ -80,6 +88,7 @@ export interface SmartTestExecutionJobDetail {
   error?: string;
   updatedScript?: string;
   scenarioCoverageResults: ScenarioCoverageResult[];
+  executionContext?: ExecutionDeviceContext;
   /** All retry attempts (platform mode); each entry has retryCount, steps, status, error */
   retryAttemptLogs?: RetryAttemptLog[];
   pwError?: PlaywrightError;
@@ -101,6 +110,7 @@ export interface SmartTestExecutionReport {
   branchId?: number;    // Platform run: our entity id; when set, backend uses for unique test resolution
   /** ExploreChimp: matches the journey execution id and the persisted execution job id after ingest. */
   journeyExecutionId?: string;
+  executionContext?: ExecutionDeviceContext;
 }
 
 export interface IngestSmartTestExecutionReportRequest {

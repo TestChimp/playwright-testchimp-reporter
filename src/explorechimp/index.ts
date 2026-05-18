@@ -65,6 +65,7 @@ import {
   type FixtureKey,
   type RunPlatform,
 } from '../project-type';
+import { ExecutionPlatform, runPlatformToExecutionPlatform } from '../execution-context';
 
 export { DataSourceEnum };
 export type {
@@ -220,8 +221,19 @@ async function uploadScreenshot(client: AxiosInstance, buffer: Buffer): Promise<
   return gcpPath;
 }
 
-async function postAnalyze(client: AxiosInstance, body: AnalyzeDataSourcesRequest): Promise<void> {
-  await client.post('/smart-test/analyze_explorechimp_data_sources', body);
+function platformForAnalyze(meta: ExploreChimpPageMeta | undefined): ExecutionPlatform {
+  return runPlatformToExecutionPlatform(meta?.platform ?? 'web');
+}
+
+async function postAnalyze(
+  client: AxiosInstance,
+  body: AnalyzeDataSourcesRequest,
+  meta?: ExploreChimpPageMeta
+): Promise<void> {
+  await client.post('/smart-test/analyze_explorechimp_data_sources', {
+    ...body,
+    platform: platformForAnalyze(meta),
+  });
 }
 
 function truncate(s: string, max: number): string {
@@ -576,7 +588,7 @@ export async function runExploreChimpMarkScreenState(
           screenState: priorScreenState,
           consoleLogsPayload: buildConsoleLogsPayload(buffers.consoleRows),
           networkRequestHash: '',
-        });
+        }, meta);
       });
     }
 
@@ -603,7 +615,7 @@ export async function runExploreChimpMarkScreenState(
             screenState: priorNetScreenState,
             apiRequestsPayload: buildApiRequestsPayload(netRows),
             networkRequestHash: hash,
-          });
+          }, meta);
         });
       }
     }
@@ -635,7 +647,7 @@ export async function runExploreChimpMarkScreenState(
             screenState: priorMetricsScreenState,
             metricsPayload,
             networkRequestHash: '',
-          });
+          }, meta);
         });
       }
     }
@@ -664,7 +676,7 @@ export async function runExploreChimpMarkScreenState(
         screenState: { name: current.name, state: current.state },
         screenshotPath: gcpPath,
         networkRequestHash: '',
-      });
+      }, meta);
     });
   }
 
@@ -704,7 +716,7 @@ export async function runExploreChimpMarkScreenState(
         domSnapshotPayload,
         axeResultsJson,
         networkRequestHash: '',
-      });
+      }, meta);
     });
   }
 

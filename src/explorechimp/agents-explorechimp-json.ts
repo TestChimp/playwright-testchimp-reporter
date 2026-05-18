@@ -295,4 +295,6 @@ export interface AnalyzeDataSourcesRequest {
   resolutionTestName?: string;
   /** Full or compacted axe `analyze()` JSON; often sent with DOM_SOURCE together with or without `domSnapshotPayload`. */
   axeResultsJson?: string;
+  /** ExecutionPlatform ordinal (web=1, ios=2, android=3). */
+  platform?: number;
 }

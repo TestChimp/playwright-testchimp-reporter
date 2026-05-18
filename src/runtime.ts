@@ -20,6 +20,7 @@ import {
   attachMobileRumAutomationHooks,
   extendMobileTestWithTrueCoverageDevice,
 } from './rum-automation-mobile';
+import { flushWebRumBuffer } from './rum-automation-web';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -61,6 +62,7 @@ function extendWebTrueCoveragePage(test: any): any {
       }
 
       await use(page);
+      await flushWebRumBuffer(page);
     },
   });
 }

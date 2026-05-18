@@ -26,7 +26,7 @@ export interface ExecutionDeviceContext {
   screenOrientation?: ScreenOrientation;
 }
 
-function runPlatformToExecutionPlatform(p: RunPlatform): ExecutionPlatform {
+export function runPlatformToExecutionPlatform(p: RunPlatform): ExecutionPlatform {
   switch (p) {
     case 'ios':
       return ExecutionPlatform.IOS_EXECUTION_PLATFORM;

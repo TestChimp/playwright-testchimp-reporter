@@ -53,6 +53,11 @@ export {
   type MobileRumAutomationUrls,
 } from './rum-automation-mobile';
 export {
+  attachWebRumAutomationHooks,
+  flushWebRumBuffer,
+  resolveWebRumFlushTimeoutMs,
+} from './rum-automation-web';
+export {
   attachMobileScreenTransportResync,
   wrapScreenForTransportResync,
 } from './mobile-screen-transport-resync';

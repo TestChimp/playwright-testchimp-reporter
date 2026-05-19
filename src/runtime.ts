@@ -20,7 +20,7 @@ import {
   attachMobileRumAutomationHooks,
   extendMobileTestWithTrueCoverageDevice,
 } from './rum-automation-mobile';
-import { flushWebRumBuffer } from './rum-automation-web';
+import { attachWebRumAutomationHooks, flushWebRumBuffer } from './rum-automation-web';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -62,7 +62,10 @@ function extendWebTrueCoveragePage(test: any): any {
       }
 
       await use(page);
-      await flushWebRumBuffer(page);
+
+      if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
+        await flushWebRumBuffer(page, testInfo, projectRootDir);
+      }
     },
   });
 }
@@ -154,6 +157,10 @@ export function installTrueCoverage(test: any, options: InstallTestChimpOptions 
   if (uiFixture === 'screen') {
     result = attachMobileRumAutomationHooks(result);
     result = attachMobileScreenTransportResync(result);
+  }
+
+  if (uiFixture === 'page') {
+    result = attachWebRumAutomationHooks(result);
   }
 
   return result;

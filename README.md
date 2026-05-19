@@ -84,7 +84,7 @@ export const test = installTestChimp(base); // default uiFixture: 'page'
 
 A side-effect-only `import '@testchimp/playwright/runtime'` does not apply extended fixtures or mobile hooks; the returned `TestType` from `installTestChimp` must be what your specs import.
 
-**Web:** the runtime injects `__TC_CI_TEST_INFO` on the `page` fixture for `@testchimp/rum-js`, then calls `globalThis.__TC_RUM_FLUSH` after each test (fixture teardown) so buffered events are sent before Playwright closes the page. Requires `@testchimp/rum-js` **≥ 0.1.3**. Optional: `TESTCHIMP_RUM_WEB_FLUSH_TIMEOUT_MS` (default **5000**, clamp **100–30000**) caps `page.evaluate` for the flush.
+**Web:** the runtime injects `__TC_CI_TEST_INFO` on the `page` fixture for `@testchimp/rum-js`, then flushes in **page fixture teardown** (after all `afterEach` hooks, while the page is still open): re-sync CI, briefly poll for buffered events, then await `globalThis.__TC_RUM_FLUSH()` (rum-js **≥ 0.1.7**). Requires `@testchimp/playwright` **≥ 0.2.6**. Optional: `TESTCHIMP_RUM_WEB_FLUSH_TIMEOUT_MS` (default **5000**), `TESTCHIMP_RUM_WEB_BUFFER_POLL_MS` (default **500**, max **2000**), `TESTCHIMP_RUM_WEB_FLUSH_DEBUG=1`.
 
 **Mobile (iOS/Android):** set `use.platform` to `ios` or `android` on Mobilewright UI projects and use `installTestChimp(base, { uiFixture: 'screen' })`. The runtime extends the Mobilewright **`device`** fixture so **`SET`** runs right after Mobilewright’s **`launchApp`** (via `device.openUrl`), before **`screen`** and the test body; **`afterEach`** still sends a trailing **`SET`** + **`v1/flush`**. By default **no** `/v1/clear` between tests—each test **`SET`s** new CI so RUM avoids a clear→set gap with missing `ci_test_info`. Integrate **TestChimpRum** for that platform (see `testchimp-rum-ios` / `testchimp-rum-android` READMEs): URL scheme / intent filter for `testchimp-rum://truecoverage/...`.
 
@@ -165,7 +165,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 - **Subpath**: `@testchimp/playwright/reporter` — explicit reporter entry for Playwright `reporter` config.
 - **Named**: `TestChimpReporter`, `TestChimpApiClient`, and types/utilities from `./types` and `./utils`.
 - **Subpath**: `@testchimp/playwright/runtime` — use `installTestChimp(test)` on your runner’s `test` object (see Quick start).
-  - **Web:** extends `page` to set `__TC_CI_TEST_INFO` and flush `@testchimp/rum-js` after each test via `globalThis.__TC_RUM_FLUSH` (requires rum-js **≥ 0.1.3**).
+  - **Web:** extends `page` for `__TC_CI_TEST_INFO`; **`afterEach`** flushes via `globalThis.__TC_RUM_FLUSH` (rum-js **≥ 0.1.3**).
   - **Mobile:** when `projects[].use.platform` is `ios`/`android`, registers hooks that call `device.openUrl` for the iOS Swift SDK and Android Kotlin SDK (same URL contract). Default: **SET-only** between tests; **no** automatic `afterAll` clear (CI clears on SDK TTL or opt-in `TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`).
 - **Named**: `buildCiTestInfoJson`, `attachMobileRumAutomationHooks`, `extendMobileTestWithTrueCoverageDevice`, `clearBetweenTestsEnabled`, `suiteTeardownClearEnabled`, `resyncTrueCoverageSetForCurrentTest`, `isLikelyMobileTransportFailure`, etc., for advanced wiring.
 
@@ -188,7 +188,7 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
   **Runner:** `installTestChimp(..., { uiFixture: 'screen' })` extends the **`device`** fixture so one **`v1/set`** runs right after Mobilewright’s **`launchApp`** (before **`screen`**), then settle (**`TESTCHIMP_RUM_AUTOMATION_POST_SET_SETTLE_MS`**, default **100** ms). **`afterEach`** (mobile projects only) sends a trailing **`set` + `v1/flush`**. **Does not** send `/v1/clear` between tests by default (avoids null `ci-test-info`). Opt in to legacy clear-first with **`TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS=1`**, or **`TESTCHIMP_RUM_AUTOMATION_SUITE_TEARDOWN_CLEAR=1`** for `afterAll` `clear`+`flush` after each spec file. **Re-sends `set` after likely transport failures** on `screen` API calls. Disable resync with **`TESTCHIMP_RUM_TRANSPORT_RESYNC=0`**. Optional URL overrides: **`TESTCHIMP_RUM_AUTOMATION_FLUSH_URL`**. If **`device.openUrl`** wedges (mobilecli), set **`TESTCHIMP_RUM_AUTOMATION_OPEN_URL_TIMEOUT_MS`** (default **25000**, clamp **100–120000**). Use **`@testchimp/playwright` ≥ 0.2.3** (restores 0.1.43 device SET behaviour; 0.2.0–0.2.2 could skip SET when `platformFromTestInfo` was `web` at fixture time).
 
 - **RUM events not linked to tests (web)**  
-  Same `installTestChimp` barrel; web uses `__TC_CI_TEST_INFO` on `page` for `@testchimp/rum-js`. Use **`@testchimp/rum-js` ≥ 0.1.3** and **`@testchimp/playwright` ≥ 0.2.2** so the page fixture flushes buffered events after each test. Fast tests that finish in under the default 10s batch interval need this flush (or call `globalThis.__TC_RUM_FLUSH()` manually).
+  Same `installTestChimp` barrel; web uses `__TC_CI_TEST_INFO` on `page` for `@testchimp/rum-js`. Use **`@testchimp/playwright` ≥ 0.2.4** for web `afterEach` flush (no app/test flush code). rum-js keeps normal prod batching; the plugin drains the buffer after each test.
 - **Verbose logging**  
   Set `verbose: true` in reporter options or use it during setup to see which steps are captured and when reports are sent.
 

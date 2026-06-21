@@ -194,6 +194,95 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 ---
 
+## How this helps in real testing scenarios
+
+`@testchimp/playwright` is the bridge between **Playwright / Mobilewright CI** and TestChimp: execution reports for QA intelligence, **AI-native step** routing (`ai.act`, `ai.verify` via [ai-wright](https://github.com/testchimphq/ai-wright)), and **TrueCoverage** tagging so RUM events from tests align with production usage.
+
+Core docs: [TrueCoverage intro](https://docs.testchimp.io/truecoverage/intro) · [How TrueCoverage works](https://docs.testchimp.io/truecoverage/how-it-works) · [SmartTests intro](https://docs.testchimp.io/smart-tests/intro) · [Run SmartTests in CI](https://docs.testchimp.io/smart-tests/run-in-ci-playwright) · [Mobile testing](https://docs.testchimp.io/smart-tests/mobile-testing)
+
+### Payments & billing (automate + tag RUM dimensions)
+
+| Scenario | Testing guide |
+|----------|----------------|
+| Stripe Checkout, Elements, 3DS | [Stripe payments in Playwright](https://docs.testchimp.io/guides/flows/testing-stripe-payments) |
+| Stripe webhooks & idempotency | [Stripe webhooks in CI](https://docs.testchimp.io/guides/integrations/testing-stripe-webhooks) |
+| Apple Pay / Google Pay / PayPal | [Wallet payment flows](https://docs.testchimp.io/guides/flows/testing-wallet-payments) |
+| Subscriptions, trials, dunning | [Subscription billing](https://docs.testchimp.io/guides/flows/testing-subscriptions-billing) |
+| E-commerce checkout | [Checkout flows](https://docs.testchimp.io/guides/verticals/testing-ecommerce-checkout-flows) |
+| Cart, coupons, promos | [Cart & promo codes](https://docs.testchimp.io/guides/verticals/testing-ecommerce-cart-and-coupons) |
+| Tax / VAT / regional pricing | [Tax & regional pricing](https://docs.testchimp.io/guides/flows/testing-tax-regional-pricing) |
+| Refunds & partial credits | [Returns & refunds](https://docs.testchimp.io/guides/flows/testing-returns-refunds) |
+| Trial → paid conversion | [Trial to paid](https://docs.testchimp.io/guides/flows/testing-trial-to-paid) |
+| Seat limits & team growth | [Seat licensing](https://docs.testchimp.io/guides/flows/testing-seat-licensing) |
+| Plan entitlements | [Feature entitlements](https://docs.testchimp.io/guides/flows/testing-feature-entitlements) |
+
+### Auth & identity (fixtures, seeds, session probes)
+
+| Scenario | Testing guide |
+|----------|----------------|
+| Firebase Auth emulator & custom tokens | [Firebase authentication](https://docs.testchimp.io/guides/auth/testing-firebase-auth) |
+| Auth0 / Okta enterprise SSO | [Auth0 & Okta SSO](https://docs.testchimp.io/guides/auth/testing-auth0-okta-sso) |
+| Google / GitHub OAuth | [OAuth social login](https://docs.testchimp.io/guides/auth/testing-oauth-social-login) |
+| Magic links & passwordless | [Magic link testing](https://docs.testchimp.io/guides/auth/testing-magic-link-passwordless) |
+| MFA / TOTP / SMS OTP | [MFA & 2FA flows](https://docs.testchimp.io/guides/auth/testing-mfa-2fa) |
+| CAPTCHA on signup/login | [CAPTCHA-enabled flows](https://docs.testchimp.io/guides/auth/testing-captcha-flows) |
+| RBAC × permission matrices | [RBAC permissions](https://docs.testchimp.io/guides/auth/testing-rbac-permissions) |
+| Admin dashboards | [Admin RBAC flows](https://docs.testchimp.io/guides/flows/testing-admin-rbac) |
+| Session timeout & refresh | [Session expiry testing](https://docs.testchimp.io/guides/auth/testing-session-timeout) |
+
+### AI & conversational UX (use `ai.act` / `ai.verify` in SmartTests)
+
+| Scenario | Testing guide |
+|----------|----------------|
+| Chatbots & multi-turn UI | [Conversational UI testing](https://docs.testchimp.io/guides/ai/testing-conversational-ui) |
+| AI agent tool calling | [AI agent workflows](https://docs.testchimp.io/guides/ai/testing-ai-agent-workflows) |
+| RAG / knowledge-base search | [RAG testing](https://docs.testchimp.io/guides/ai/testing-rag-search) |
+| LLM output / JSON schema | [LLM output validation](https://docs.testchimp.io/guides/ai/testing-llm-output-validation) |
+| Streaming responses | [Streaming AI responses](https://docs.testchimp.io/guides/ai/testing-ai-streaming-responses) |
+| Evals vs deterministic E2E | [AI testing guides hub](https://docs.testchimp.io/guides/ai/intro) · [Conversational UI](https://docs.testchimp.io/guides/ai/testing-conversational-ui) |
+| Canvas, charts, maps | [Canvas & visual widgets](https://docs.testchimp.io/guides/ai/testing-canvas-visual-interactions) · [Google Maps](https://docs.testchimp.io/guides/integrations/testing-google-maps) |
+| Hybrid SmartTests | [AI-powered web apps](https://docs.testchimp.io/guides/verticals/testing-ai-web-apps) |
+
+### Integrations & async side effects
+
+| Scenario | Testing guide |
+|----------|----------------|
+| Transactional email (Mailtrap patterns) | [Transactional email](https://docs.testchimp.io/guides/integrations/testing-transactional-email) |
+| SMS / OTP verification | [SMS & OTP testing](https://docs.testchimp.io/guides/integrations/testing-sms-otp) |
+| Async webhooks | [Webhooks & async events](https://docs.testchimp.io/guides/integrations/testing-webhooks-async) |
+| PDF invoices & downloads | [PDF generation & downloads](https://docs.testchimp.io/guides/integrations/testing-pdf-downloads) |
+| File upload & CSV import/export | [File uploads](https://docs.testchimp.io/guides/integrations/testing-file-uploads) · [CSV import/export](https://docs.testchimp.io/guides/integrations/testing-csv-import-export) |
+| Third-party iframes & embeds | [Third-party embeds](https://docs.testchimp.io/guides/integrations/testing-third-party-embeds) |
+| Push notification preferences | [Push notifications](https://docs.testchimp.io/guides/integrations/testing-push-notifications) |
+
+### UI patterns, SaaS & industry verticals
+
+| Scenario | Testing guide |
+|----------|----------------|
+| Onboarding funnels & screen states | [SaaS onboarding](https://docs.testchimp.io/guides/verticals/testing-saas-onboarding-flows) · [Screen-state annotations](https://docs.testchimp.io/smart-tests/screen-state-annotations) |
+| Form validation & a11y errors | [Form validation](https://docs.testchimp.io/guides/patterns/testing-form-validation) |
+| Localization & RTL | [Localization / i18n](https://docs.testchimp.io/guides/patterns/testing-localization-i18n) |
+| GDPR export / delete / consent | [GDPR privacy flows](https://docs.testchimp.io/guides/patterns/testing-gdpr-privacy) |
+| Search, filters, data grids | [Search & filters](https://docs.testchimp.io/guides/patterns/testing-search-filters) · [Data grids](https://docs.testchimp.io/guides/patterns/testing-data-grids-tables) |
+| Calendar & scheduling | [Calendar scheduling](https://docs.testchimp.io/guides/patterns/testing-calendar-scheduling) |
+| Fintech transfers & ledgers | [Fintech web apps](https://docs.testchimp.io/guides/verticals/testing-fintech-web-apps) |
+| HR, healthcare, insurance, legal | [HR applications](https://docs.testchimp.io/guides/verticals/testing-hr-applications) · [Healthcare portals](https://docs.testchimp.io/guides/verticals/testing-healthcare-portals) · [Insurance quotes](https://docs.testchimp.io/guides/verticals/testing-insurance-quotes) · [E-signatures](https://docs.testchimp.io/guides/verticals/testing-legal-esignatures) |
+| Audit & compliance logs | [Audit & compliance](https://docs.testchimp.io/guides/verticals/testing-audit-compliance-logs) |
+| Flaky E2E at startups | [Fix flaky E2E tests](https://docs.testchimp.io/guides/verticals/testing-flaky-e2e-tests-startups) |
+
+### TestChimp workflow (plans → CI → evolve)
+
+- [Test planning in Git](https://docs.testchimp.io/test-planning/intro) — markdown scenarios as source of truth
+- [Requirement traceability](https://docs.testchimp.io/test-planning/requirement-traceability) — `// @Scenario:` links in Playwright specs
+- [Test runs](https://docs.testchimp.io/test-planning/test-runs) — CI + manual runs in one view
+- [Arrange / Act / Assert pattern](https://docs.testchimp.io/qa-autopilot-claude/testchimps-approach-to-test-automation) — seeds, probes, hybrid AI steps
+- [/testchimp test](https://docs.testchimp.io/qa-autopilot-claude/test) · [/testchimp evolve](https://docs.testchimp.io/qa-autopilot-claude/evolve) · [ExploreChimp](https://docs.testchimp.io/explorations/intro)
+- [Record-replay vs TestChimp](https://docs.testchimp.io/comparisons/record-replay-vs-testchimp)
+
+Browse all scenario guides: [Testing guides hub](https://docs.testchimp.io/guides/intro) · [Business flows](https://docs.testchimp.io/guides/flows/intro) · [Auth](https://docs.testchimp.io/guides/auth/intro) · [AI UX](https://docs.testchimp.io/guides/ai/intro) · [Integrations](https://docs.testchimp.io/guides/integrations/intro) · [UI patterns](https://docs.testchimp.io/guides/patterns/intro) · [Verticals](https://docs.testchimp.io/guides/verticals/intro)
+
+---
+
 ## License
 
 MIT.

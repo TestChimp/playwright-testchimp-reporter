@@ -33,6 +33,7 @@ import {
   parseExploreChimpLongTaskThresholdMs,
   resetExploreChimpPerfMetricsBuffers,
 } from './perf-metrics';
+import { resolvePageUrlParts, type PageUrlParts } from './pageUrlUtils';
 import {
   DataSourceEnum,
   type AnalyzeDataSourcesRequest,
@@ -159,6 +160,8 @@ interface BufferState {
   consoleRows: ConsoleRow[];
   networkRows: NetworkRow[];
   priorMarkedScreen: { name: string; state: string } | null;
+  priorPagePath?: string;
+  priorPageQuery?: string;
   /** Wall-clock start of the interval attributed to the *prior* screen-state (scriptservice `metricsCollectionStartTimestamp`). */
   metricsIntervalSinceMs: number;
 }
@@ -189,6 +192,13 @@ function parseNetworkRegex(): RegExp | null {
     console.warn(`[ExploreChimp] Invalid EXPLORECHIMP_REQUEST_REGEX_TO_ANALYZE — ignoring`);
     return null;
   }
+}
+
+function pageUrlPayload(parts: PageUrlParts): Pick<AnalyzeDataSourcesRequest, 'pagePath' | 'pageQuery'> {
+  return {
+    ...(parts.pagePath ? { pagePath: parts.pagePath } : {}),
+    ...(parts.pageQuery ? { pageQuery: parts.pageQuery } : {}),
+  };
 }
 
 function createBackendClient(): AxiosInstance {
@@ -559,6 +569,11 @@ export async function runExploreChimpMarkScreenState(
   const buffers = getBuffers(target);
   const prior = buffers.priorMarkedScreen;
   const current = { name: screen, state };
+  const currentPageParts = resolvePageUrlParts(target);
+  const priorPageParts: PageUrlParts = {
+    ...(buffers.priorPagePath ? { pagePath: buffers.priorPagePath } : {}),
+    ...(buffers.priorPageQuery ? { pageQuery: buffers.priorPageQuery } : {}),
+  };
   /** Same resolution order as execution reports when reporter uses {@link getBranchName} in buildReport. */
   const branchName = getBranchName() ?? '';
   const resolutionFields = meta.analyzeResolutionPayload;
@@ -588,6 +603,7 @@ export async function runExploreChimpMarkScreenState(
           screenState: priorScreenState,
           consoleLogsPayload: buildConsoleLogsPayload(buffers.consoleRows),
           networkRequestHash: '',
+          ...pageUrlPayload(priorPageParts),
         }, meta);
       });
     }
@@ -615,6 +631,7 @@ export async function runExploreChimpMarkScreenState(
             screenState: priorNetScreenState,
             apiRequestsPayload: buildApiRequestsPayload(netRows),
             networkRequestHash: hash,
+            ...pageUrlPayload(priorPageParts),
           }, meta);
         });
       }
@@ -647,6 +664,7 @@ export async function runExploreChimpMarkScreenState(
             screenState: priorMetricsScreenState,
             metricsPayload,
             networkRequestHash: '',
+            ...pageUrlPayload(priorPageParts),
           }, meta);
         });
       }
@@ -676,6 +694,7 @@ export async function runExploreChimpMarkScreenState(
         screenState: { name: current.name, state: current.state },
         screenshotPath: gcpPath,
         networkRequestHash: '',
+        ...pageUrlPayload(currentPageParts),
       }, meta);
     });
   }
@@ -716,10 +735,13 @@ export async function runExploreChimpMarkScreenState(
         domSnapshotPayload,
         axeResultsJson,
         networkRequestHash: '',
+        ...pageUrlPayload(currentPageParts),
       }, meta);
     });
   }
 
   buffers.priorMarkedScreen = current;
+  buffers.priorPagePath = currentPageParts.pagePath;
+  buffers.priorPageQuery = currentPageParts.pageQuery;
   await resetExploreChimpIntervalBuffers(target);
 }

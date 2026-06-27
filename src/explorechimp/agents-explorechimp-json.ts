@@ -297,4 +297,6 @@ export interface AnalyzeDataSourcesRequest {
   axeResultsJson?: string;
   /** ExecutionPlatform ordinal (web=1, ios=2, android=3). */
   platform?: number;
+  pagePath?: string;
+  pageQuery?: string;
 }

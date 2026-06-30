@@ -93,6 +93,7 @@ export interface SmartTestExecutionJobDetail {
   retryAttemptLogs?: RetryAttemptLog[];
   pwError?: PlaywrightError;
   traceGcsPath?: string;
+  gitCommitSha?: string;
 }
 
 export interface SmartTestExecutionReport {
@@ -108,6 +109,7 @@ export interface SmartTestExecutionReport {
   completedAtMillis?: number;
   branchName?: string;  // CI: from git (e.g. GITHUB_REF_NAME); not available in platform run
   branchId?: number;    // Platform run: our entity id; when set, backend uses for unique test resolution
+  gitCommitSha?: string;  // CI/local: git rev-parse HEAD (cached per process)
   /** ExploreChimp: matches the journey execution id and the persisted execution job id after ingest. */
   journeyExecutionId?: string;
   executionContext?: ExecutionDeviceContext;

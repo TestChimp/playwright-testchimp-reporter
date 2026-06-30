@@ -28,6 +28,7 @@ import {
   generateStepId,
   generateUUID,
   getBranchName,
+  getRunCommitSha,
   getEnvVar,
   getTestChimpBatchInvocationFilePath,
   normalizeManifestFolderPath,
@@ -943,6 +944,7 @@ export class TestChimpReporter implements Reporter {
     const paths = derivePaths(test, this.testsFolder, this.config.rootDir, this.options.verbose);
     /** Align with ExploreChimp analyze payloads (`getBranchName` in explorechimp/index): TESTCHIMP_BRANCH_NAME first. */
     const branchName = getBranchName();
+    const gitCommitSha = getRunCommitSha();
     // Platform run: scriptservice sets TESTCHIMP_BRANCH_ID (our entity id) for unique test resolution; CI does not have it
     const branchIdRaw = getEnvVar('TESTCHIMP_BRANCH_ID', '');
     const branchId = branchIdRaw ? parseInt(branchIdRaw, 10) : undefined;
@@ -968,11 +970,13 @@ export class TestChimpReporter implements Reporter {
         pwError: this.toPlaywrightError(result.error),
         scenarioCoverageResults: [], // Backend will populate if empty
         executionContext,
+        gitCommitSha,
       },
       startedAtMillis: execution.startedAt,
       completedAtMillis: Date.now(),
       branchName,
       branchId: branchIdValid,
+      gitCommitSha,
       executionContext,
     };
     const exploreChimpJobId = this.exploreChimpJourneyExecutionJobId(test, result, paths);

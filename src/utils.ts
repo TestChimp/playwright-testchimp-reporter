@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import type { TestCase, Suite } from '@playwright/test/reporter';
 import type { JobManifestEntry } from './types';
@@ -333,6 +334,35 @@ export function deriveTestsFolder(_projectRootDir: string): string {
  * Current git branch name from env / CI (TrueCoverage ci-test-info, SmartTest execution reports, ExploreChimp
  * `branchName` on `analyze_explorechimp_data_sources`).
  */
+let cachedRunCommitSha: string | undefined | null = null;
+
+/**
+ * Current git commit SHA from `git rev-parse HEAD` in cwd (cached per process).
+ * Used by TrueCoverage, SmartTest execution reports, and ExploreChimp analyze payloads.
+ */
+export function getRunCommitSha(): string | undefined {
+  if (cachedRunCommitSha !== null) {
+    return cachedRunCommitSha || undefined;
+  }
+  try {
+    const sha = execSync('git rev-parse HEAD', {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    cachedRunCommitSha = sha || '';
+  } catch {
+    const fromCi =
+      process.env.GITHUB_SHA ||
+      process.env.CI_COMMIT_SHA ||
+      process.env.GIT_COMMIT ||
+      process.env.COMMIT_SHA ||
+      process.env.TESTCHIMP_GIT_COMMIT_SHA;
+    cachedRunCommitSha = fromCi?.trim() || '';
+  }
+  return cachedRunCommitSha || undefined;
+}
+
 export function getBranchName(): string | undefined {
   const fromEnv =
     process.env.TESTCHIMP_BRANCH_NAME ||

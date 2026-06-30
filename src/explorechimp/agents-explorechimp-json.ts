@@ -282,6 +282,8 @@ export interface AnalyzeDataSourcesRequest {
   explorationId?: string;
   /** Git branch label; server resolves `branch_id`. Prefer env `TESTCHIMP_BRANCH_NAME` (see `getBranchName()` in `src/utils.ts`). */
   branchName?: string;
+  /** Git commit SHA at run time (`getRunCommitSha()` in `src/utils.ts`). */
+  gitCommitSha?: string;
   screenState?: ScreenState;
   projectId?: string;
   organizationId?: string;

@@ -1,8 +1,3 @@
-/**
- * Type definitions for the TestChimp Playwright reporter
- * Uses camelCase for TypeScript interfaces
- */
-
 export enum SmartTestExecutionStatus {
   UNKNOWN_SMART_TEST_EXECUTION_STATUS = 0,
   SMART_TEST_EXECUTION_QUEUED = 1,
@@ -13,6 +8,19 @@ export enum SmartTestExecutionStatus {
   SMART_TEST_EXECUTION_CANCELLED = 6,
   SMART_TEST_EXECUTION_SKIPPED = 7,
   SMART_TEST_EXECUTION_INTERRUPTED = 8
+}
+
+export enum BatchInvocationStatus {
+  UNKNOWN_BATCH_INVOCATION_STATUS = 0,
+  BATCH_INVOCATION_IN_PROGRESS = 1,
+  BATCH_INVOCATION_COMPLETE = 2,
+  BATCH_INVOCATION_FAILED = 3,
+  BATCH_INVOCATION_EXCEPTION = 4,
+  BATCH_INVOCATION_CANCELLED = 5,
+}
+
+export interface CompleteBatchInvocationResponse {
+  materialized?: boolean;
 }
 
 export enum StepExecutionStatus {

@@ -20,7 +20,8 @@ import {
   StepExecutionStatus,
   SmartTestExecutionJobDetail,
   RetryAttemptLog,
-  JobManifestEntry
+  JobManifestEntry,
+  BatchInvocationStatus,
 } from './types';
 import { buildExecutionDeviceContext } from './execution-context';
 import {
@@ -637,6 +638,27 @@ export class TestChimpReporter implements Reporter {
         console.log(`[TestChimp] Waiting for ${pendingStart} pending operations to complete...`);
       }
       await this.drainAllPendingBuckets();
+      if (
+        this.isEnabled &&
+        this.apiClient &&
+        this.options.executionMode === 'ci' &&
+        this.batchInvocationId?.trim()
+      ) {
+        const batchStatus = mapPlaywrightSuiteStatusToBatchStatus(result.status);
+        try {
+          const completeResponse = await this.apiClient.completeBatchInvocation({
+            batchInvocationId: this.batchInvocationId,
+            status: batchStatus,
+          });
+          if (this.options.verbose) {
+            console.log(
+              `[TestChimp] complete_batch_invocation materialized=${completeResponse.materialized ?? false} status=${result.status}`
+            );
+          }
+        } catch (e) {
+          console.error('[TestChimp] complete_batch_invocation failed:', e);
+        }
+      }
       // Best-effort: if a test never ran onTestEnd's finally (worker/process edge cases), still close open ExploreChimp journeys.
       if (this.isEnabled && this.apiClient && isExploreChimpEnabled() && this.options.executionMode !== 'repair') {
         const leftovers = [...this.testExecutions.entries()];
@@ -1331,5 +1353,18 @@ export class TestChimpReporter implements Reporter {
       mapped.cause = this.toPlaywrightError(error.cause, depth + 1, maxDepth);
     }
     return mapped;
+  }
+}
+
+function mapPlaywrightSuiteStatusToBatchStatus(status: FullResult['status']): BatchInvocationStatus {
+  switch (status) {
+    case 'passed':
+      return BatchInvocationStatus.BATCH_INVOCATION_COMPLETE;
+    case 'timedout':
+      return BatchInvocationStatus.BATCH_INVOCATION_EXCEPTION;
+    case 'failed':
+    case 'interrupted':
+    default:
+      return BatchInvocationStatus.BATCH_INVOCATION_FAILED;
   }
 }

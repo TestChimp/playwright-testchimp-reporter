@@ -3,7 +3,8 @@ import FormData from 'form-data';
 import {
   IngestSmartTestExecutionReportResponse,
   SmartTestExecutionReport,
-  SmartTestExecutionJobDetail
+  SmartTestExecutionJobDetail,
+  CompleteBatchInvocationResponse,
 } from './types';
 import { getEnvVar } from './utils';
 
@@ -136,6 +137,28 @@ export class TestChimpApiClient {
         }
       }
 
+      throw error;
+    }
+  }
+
+  /**
+   * CI suite-end: finalize batch invocation status and materialize denormalized counts.
+   */
+  async completeBatchInvocation(body: {
+    batchInvocationId: string;
+    status: number;
+  }): Promise<CompleteBatchInvocationResponse> {
+    try {
+      const response = await this.client.post('/api/complete_batch_invocation', body, {
+        timeout: this.requestTimeoutMs,
+      });
+      return toCamelCase(response.data) as CompleteBatchInvocationResponse;
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] complete_batch_invocation error (${status}): ${message}`);
+      }
       throw error;
     }
   }

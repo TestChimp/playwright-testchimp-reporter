@@ -330,19 +330,28 @@ export function deriveTestsFolder(_projectRootDir: string): string {
   return process.env.TESTCHIMP_TESTS_FOLDER || 'tests';
 }
 
-/**
- * Current git branch name from env / CI (TrueCoverage ci-test-info, SmartTest execution reports, ExploreChimp
- * `branchName` on `analyze_explorechimp_data_sources`).
- */
 let cachedRunCommitSha: string | undefined | null = null;
+let cachedBranchName: string | null = null;
 
 /**
- * Current git commit SHA from `git rev-parse HEAD` in cwd (cached per process).
+ * Current git commit SHA (cached per process).
+ * Resolution order: TESTCHIMP_GIT_COMMIT_SHA, GitHub Actions {@code pull_request.head.sha}
+ * (durable PR tip — not the ephemeral merge SHA), {@code git rev-parse HEAD}, then CI env vars.
  * Used by TrueCoverage, SmartTest execution reports, and ExploreChimp analyze payloads.
  */
 export function getRunCommitSha(): string | undefined {
   if (cachedRunCommitSha !== null) {
     return cachedRunCommitSha || undefined;
+  }
+  const fromOverride = process.env.TESTCHIMP_GIT_COMMIT_SHA?.trim();
+  if (fromOverride) {
+    cachedRunCommitSha = fromOverride;
+    return cachedRunCommitSha;
+  }
+  const fromPrHead = readGithubPullRequestHeadSha();
+  if (fromPrHead) {
+    cachedRunCommitSha = fromPrHead;
+    return cachedRunCommitSha;
   }
   try {
     const sha = execSync('git rev-parse HEAD', {
@@ -356,25 +365,76 @@ export function getRunCommitSha(): string | undefined {
       process.env.GITHUB_SHA ||
       process.env.CI_COMMIT_SHA ||
       process.env.GIT_COMMIT ||
-      process.env.COMMIT_SHA ||
-      process.env.TESTCHIMP_GIT_COMMIT_SHA;
+      process.env.COMMIT_SHA;
     cachedRunCommitSha = fromCi?.trim() || '';
   }
   return cachedRunCommitSha || undefined;
 }
 
+/**
+ * On {@code pull_request} workflows, {@code GITHUB_SHA} / checkout HEAD is often an ephemeral
+ * merge commit. Prefer the durable PR head from the event payload.
+ */
+function readGithubPullRequestHeadSha(): string | undefined {
+  const eventName = process.env.GITHUB_EVENT_NAME?.trim();
+  if (eventName && eventName !== 'pull_request' && eventName !== 'pull_request_target') {
+    return undefined;
+  }
+  const eventPath = process.env.GITHUB_EVENT_PATH?.trim();
+  if (!eventPath) {
+    return undefined;
+  }
+  try {
+    const raw = fs.readFileSync(eventPath, 'utf8');
+    const event = JSON.parse(raw) as {
+      pull_request?: { head?: { sha?: string } };
+    };
+    const sha = event.pull_request?.head?.sha?.trim();
+    return sha || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Current git branch name (cached per process).
+ * Resolution order: TESTCHIMP_/CI env vars, GITHUB_REF_NAME / GITHUB_REF, then
+ * `git rev-parse --abbrev-ref HEAD` (skips detached HEAD).
+ */
 export function getBranchName(): string | undefined {
+  if (cachedBranchName !== null) {
+    return cachedBranchName || undefined;
+  }
   const fromEnv =
     process.env.TESTCHIMP_BRANCH_NAME ||
     process.env.TESTCHIMP_BRANCH ||
     process.env.CI_COMMIT_REF_NAME ||
+    process.env.GITHUB_REF_NAME ||
     process.env.GIT_BRANCH ||
     process.env.BRANCH_NAME;
-  if (fromEnv) return fromEnv;
+  const trimmedEnv = fromEnv?.trim();
+  if (trimmedEnv) {
+    cachedBranchName = trimmedEnv;
+    return cachedBranchName;
+  }
   // GitHub Actions: GITHUB_REF is e.g. refs/heads/main
   const ghRef = process.env.GITHUB_REF;
-  if (ghRef?.startsWith('refs/heads/')) return ghRef.slice('refs/heads/'.length);
-  return undefined;
+  if (ghRef?.startsWith('refs/heads/')) {
+    cachedBranchName = ghRef.slice('refs/heads/'.length);
+    return cachedBranchName || undefined;
+  }
+  try {
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    // Detached HEAD reports "HEAD" — treat as unknown
+    cachedBranchName = branch && branch !== 'HEAD' ? branch : '';
+  } catch {
+    cachedBranchName = '';
+  }
+  return cachedBranchName || undefined;
 }
 
 const BATCH_ID_FILENAME = '.testchimp-batch-invocation-id';

@@ -578,6 +578,10 @@ export async function runExploreChimpMarkScreenState(
   /** Same resolution order as execution reports when reporter uses {@link getBranchName} in buildReport. */
   const branchName = getBranchName() ?? '';
   const gitCommitSha = getRunCommitSha() ?? '';
+  const releaseLabel =
+    (process.env.TESTCHIMP_RELEASE || process.env.TESTCHIMP_RELEASE_NAME || '').trim();
+  /** Only set AnalyzeDataSourcesRequest.release_label when non-empty (proto optional). */
+  const releaseLabelFields = releaseLabel ? { releaseLabel } : {};
   const resolutionFields = meta.analyzeResolutionPayload;
 
   const wantNetwork = sources.has('NETWORK');
@@ -601,6 +605,7 @@ export async function runExploreChimpMarkScreenState(
           ...resolutionFields,
           branchName,
           gitCommitSha,
+          ...releaseLabelFields,
           stepId: exploreChimpAnalyticsStepId(meta, consoleTitle),
           analyzedDataSource: DataSourceEnum.CONSOLE_SOURCE,
           screenState: priorScreenState,
@@ -630,6 +635,7 @@ export async function runExploreChimpMarkScreenState(
             ...resolutionFields,
             branchName,
             gitCommitSha,
+            ...releaseLabelFields,
             stepId: exploreChimpAnalyticsStepId(meta, networkTitle),
             analyzedDataSource: DataSourceEnum.NETWORK_SOURCE,
             screenState: priorNetScreenState,
@@ -664,6 +670,7 @@ export async function runExploreChimpMarkScreenState(
             ...resolutionFields,
             branchName,
             gitCommitSha,
+            ...releaseLabelFields,
             stepId: exploreChimpAnalyticsStepId(meta, metricsTitle),
             analyzedDataSource: DataSourceEnum.METRICS_SOURCE,
             screenState: priorMetricsScreenState,
@@ -695,6 +702,7 @@ export async function runExploreChimpMarkScreenState(
         ...resolutionFields,
         branchName,
         gitCommitSha,
+        ...releaseLabelFields,
         stepId: exploreChimpAnalyticsStepId(meta, shotTitle),
         analyzedDataSource: DataSourceEnum.SCREENSHOT_SOURCE,
         screenState: { name: current.name, state: current.state },
@@ -736,6 +744,7 @@ export async function runExploreChimpMarkScreenState(
         ...resolutionFields,
         branchName,
         gitCommitSha,
+        ...releaseLabelFields,
         stepId: exploreChimpAnalyticsStepId(meta, domTitle),
         analyzedDataSource: DataSourceEnum.DOM_SOURCE,
         screenState: { name: current.name, state: current.state },

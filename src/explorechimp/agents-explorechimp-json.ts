@@ -284,6 +284,8 @@ export interface AnalyzeDataSourcesRequest {
   branchName?: string;
   /** Git commit SHA at run time (`getRunCommitSha()` in `src/utils.ts`). */
   gitCommitSha?: string;
+  /** Release catalog version from `TESTCHIMP_RELEASE` → explorations.release_label. */
+  releaseLabel?: string;
   screenState?: ScreenState;
   projectId?: string;
   organizationId?: string;

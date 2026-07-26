@@ -113,8 +113,12 @@ export class TestChimpReporter implements Reporter {
    * parallel tests in the same worker do not block each other. onEnd drains every bucket.
    */
   private pendingOperationsByJobId: Map<string, Promise<any>[]> = new Map();
-  /** Track platform per-test finalization so onEnd can await it even if Playwright doesn't. */
-  private inFlightPlatformFinalizations: Set<Promise<void>> = new Set();
+  /**
+   * In-flight `onTestEnd` work (CI ingest + screenshot/trace upload, platform test_end, ExploreChimp
+   * journey end). Playwright's V2 reporter wrapper does **not** await `onTestEnd`, so `onEnd` must
+   * drain this set for both **ci** and **platform** before `completeBatchInvocation` / process exit.
+   */
+  private inFlightTestEndWork: Set<Promise<void>> = new Set();
   /** Idempotency: same journey execution id must not POST journey_execution_end twice (CI + platform + finally). */
   private exploreChimpJourneyEndSentIds = new Set<string>();
 
@@ -481,6 +485,17 @@ export class TestChimpReporter implements Reporter {
   }
 
   async onTestEnd(test: TestCase, result: TestResult): Promise<void> {
+    // Playwright does not await onTestEnd; register so onEnd can drain before exit.
+    const work = this.runTrackedOnTestEnd(test, result);
+    this.inFlightTestEndWork.add(work);
+    try {
+      await work;
+    } finally {
+      this.inFlightTestEndWork.delete(work);
+    }
+  }
+
+  private async runTrackedOnTestEnd(test: TestCase, result: TestResult): Promise<void> {
     const testKey = this.getTestKey(test, result.retry);
     const executionSnapshot = this.testExecutions.get(testKey) ?? null;
     try {
@@ -554,11 +569,11 @@ export class TestChimpReporter implements Reporter {
     if (this.options.executionMode === 'platform') {
       if (isFinalAttempt && this.apiClient) {
         const finalizePromise = this.platformFinalizeTestEnd(test, result, execution);
-        this.inFlightPlatformFinalizations.add(finalizePromise);
+        this.inFlightTestEndWork.add(finalizePromise);
         try {
           await finalizePromise;
         } finally {
-          this.inFlightPlatformFinalizations.delete(finalizePromise);
+          this.inFlightTestEndWork.delete(finalizePromise);
         }
       }
       console.log(
@@ -631,8 +646,8 @@ export class TestChimpReporter implements Reporter {
   async onEnd(result: FullResult): Promise<void> {
     try {
       const pendingStart = this.countTotalPendingOperations();
-      if (this.inFlightPlatformFinalizations.size > 0) {
-        await Promise.allSettled([...this.inFlightPlatformFinalizations]);
+      if (this.inFlightTestEndWork.size > 0) {
+        await Promise.allSettled([...this.inFlightTestEndWork]);
       }
       if (pendingStart > 0) {
         console.log(`[TestChimp] Waiting for ${pendingStart} pending operations to complete...`);

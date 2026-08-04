@@ -39,6 +39,12 @@ import {
 } from './utils';
 import { isExploreChimpEnabled } from './explorechimp/index';
 import { consumeExploreChimpAnalyticsStepScreenState } from './explorechimp/analytics-step-screen-state-registry';
+import {
+  API_COVERAGE_ATTACHMENT_NAME,
+  ApiOperationTestMode,
+  parseApiCoverageAttachment,
+  type ApiOperationInteraction,
+} from './api-coverage/capture';
 import path from 'path';
 
 /**
@@ -254,10 +260,14 @@ export class TestChimpReporter implements Reporter {
     fileName: string,
     suitePath: string[],
     testName: string
-  ): { jobId: string; strategy: string } | undefined {
+  ): { jobId: string; testId?: string; strategy: string } | undefined {
     const resolved = resolveManifestEntryFromRuntime(this.jobManifest, { folderPath, fileName, suitePath, testName });
     if (!resolved?.entry?.jobId) return undefined;
-    return { jobId: resolved.entry.jobId, strategy: resolved.strategy };
+    return {
+      jobId: resolved.entry.jobId,
+      testId: resolved.entry.testId,
+      strategy: resolved.strategy,
+    };
   }
 
   private getManifestDebugCandidates(fileName: string, testName: string, limit: number = 3): string {
@@ -511,6 +521,43 @@ export class TestChimpReporter implements Reporter {
     }
   }
 
+  /**
+   * US-185: read the buffered API operation interactions attached by the `page` fixture
+   * (see runtime.ts `extendWebTrueCoveragePage`) and forward them for ingest, filling in
+   * whatever test/execution identity is available at the call site. Best-effort — never
+   * throws, and no-ops when the attachment is absent (e.g. TESTCHIMP_API_COVERAGE=0, no page
+   * fixture used, or no matching traffic observed).
+   */
+  private async ingestApiCoverageIfPresent(
+    result: TestResult,
+    ids: { testId?: string; executionId?: string }
+  ): Promise<void> {
+    if (!this.apiClient) return;
+    const attachment = result.attachments.find((a) => a.name === API_COVERAGE_ATTACHMENT_NAME);
+    if (!attachment) return;
+    try {
+      let raw: Buffer | string | undefined = attachment.body;
+      if (!raw && attachment.path) {
+        raw = fs.readFileSync(attachment.path);
+      }
+      if (!raw) return;
+      const interactions = parseApiCoverageAttachment(raw);
+      if (interactions.length === 0) return;
+
+      const enriched: ApiOperationInteraction[] = interactions.map((interaction) => ({
+        ...interaction,
+        testId: interaction.testId ?? ids.testId,
+        executionId: interaction.executionId ?? ids.executionId,
+        batchInvocationId: interaction.batchInvocationId ?? this.batchInvocationId,
+        environment: interaction.environment ?? this.options.environment,
+        testMode: interaction.testMode ?? ApiOperationTestMode.AUTOMATION,
+      }));
+      await this.apiClient.ingestApiOperationInteractions(enriched);
+    } catch (err) {
+      console.error('[TestChimp] Failed to ingest API operation interactions (non-fatal):', err);
+    }
+  }
+
   private async _onTestEndInner(test: TestCase, result: TestResult): Promise<void> {
     console.log(`[TestChimp] onTestEnd called for test: ${test.title} (status: ${result.status}, retry: ${result.retry})`);
     
@@ -543,6 +590,7 @@ export class TestChimpReporter implements Reporter {
           console.error(`[TestChimp] repair_test_end failed jobId=${jobId}:`, e);
         }
       }
+      await this.ingestApiCoverageIfPresent(result, {});
       return;
     }
 
@@ -567,6 +615,8 @@ export class TestChimpReporter implements Reporter {
 
     // Platform mode: we keep all retry attempts in testExecutions until test_end. Only send test_end on final attempt (with full retryAttemptLogs), then cleanup.
     if (this.options.executionMode === 'platform') {
+      const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
+      const manifestHit = this.getJobFromManifest(paths.folderPath, paths.fileName, paths.suitePath, paths.testName);
       if (isFinalAttempt && this.apiClient) {
         const finalizePromise = this.platformFinalizeTestEnd(test, result, execution);
         this.inFlightTestEndWork.add(finalizePromise);
@@ -576,6 +626,11 @@ export class TestChimpReporter implements Reporter {
           this.inFlightTestEndWork.delete(finalizePromise);
         }
       }
+      // Coverage denorm requires testId; resolve from platform job manifest (not empty {}).
+      await this.ingestApiCoverageIfPresent(result, {
+        testId: manifestHit?.testId,
+        executionId: manifestHit?.jobId,
+      });
       console.log(
         `[TestChimp] ingest_diag skip_ingest reason=platform_mode test=${JSON.stringify(test.title)} isFinalAttempt=${isFinalAttempt}`
       );
@@ -632,11 +687,14 @@ export class TestChimpReporter implements Reporter {
           console.log(`[TestChimp] Auto-populated ${response.scenariosPopulated} scenario(s)`);
         }
       }
+      await this.ingestApiCoverageIfPresent(result, { testId: response.testId, executionId: response.jobId });
     } catch (error) {
       console.error(
         `[TestChimp] ingest_diag after_ingest_error baseUrl=${JSON.stringify(this.apiClient.getBaseUrl())} test=${JSON.stringify(test.title)}`,
         error
       );
+      // Best-effort: still forward coverage even when the smarttest execution report failed to ingest.
+      await this.ingestApiCoverageIfPresent(result, {});
     }
 
     // Cleanup (ExploreChimp journey_execution_end is invoked from onTestEnd finally).

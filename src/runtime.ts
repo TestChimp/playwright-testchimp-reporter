@@ -21,6 +21,14 @@ import {
   extendMobileTestWithTrueCoverageDevice,
 } from './rum-automation-mobile';
 import { attachWebRumAutomationHooks, flushWebRumBuffer } from './rum-automation-web';
+import {
+  API_COVERAGE_ATTACHMENT_NAME,
+  apiCoveragePayloadsEnabled,
+  attachApiCoverageCapture,
+  buildApiCoverageUrlRegex,
+  drainApiCoverageInteractions,
+  isApiCoverageEnabled,
+} from './api-coverage/capture';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -61,10 +69,40 @@ function extendWebTrueCoveragePage(test: any): any {
         // Ignore: page may be closed or not ready yet.
       }
 
+      const apiCoverageEnabled = isApiCoverageEnabled();
+      if (apiCoverageEnabled) {
+        try {
+          attachApiCoverageCapture(page, {
+            urlRegex: buildApiCoverageUrlRegex(),
+            capturePayloads: apiCoveragePayloadsEnabled(),
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(`[TestChimp] Failed to attach API coverage capture (non-fatal): ${msg}`);
+        }
+      }
+
       await use(page);
 
       if (!isMobilePlatform(platformFromTestInfo(testInfo))) {
         await flushWebRumBuffer(page, testInfo, projectRootDir);
+      }
+
+      if (apiCoverageEnabled) {
+        try {
+          const interactions = await drainApiCoverageInteractions(page);
+          if (interactions.length > 0) {
+            await testInfo.attach(API_COVERAGE_ATTACHMENT_NAME, {
+              body: JSON.stringify(interactions),
+              contentType: 'application/json',
+            });
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(`[TestChimp] Failed to attach API coverage interactions (non-fatal): ${msg}`);
+        }
       }
     },
   });

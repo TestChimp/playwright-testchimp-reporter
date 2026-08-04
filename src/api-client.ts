@@ -7,6 +7,7 @@ import {
   CompleteBatchInvocationResponse,
 } from './types';
 import { getEnvVar } from './utils';
+import type { ApiOperationInteraction } from './api-coverage/capture';
 
 /** Default cap for most JSON API calls (ms). Override with TESTCHIMP_REQUEST_TIMEOUT_MS. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -138,6 +139,32 @@ export class TestChimpApiClient {
       }
 
       throw error;
+    }
+  }
+
+  /**
+   * US-185: append-only API operation interaction ingest (no coverage computation client-side;
+   * the backend matches interactions to operations/tests). Never throws — best-effort, logs on failure.
+   */
+  async ingestApiOperationInteractions(interactions: ApiOperationInteraction[]): Promise<void> {
+    if (!interactions.length) return;
+    try {
+      await this.client.post(
+        '/api/ingest_api_operation_interactions',
+        { interactions },
+        { timeout: this.longRequestTimeoutMs }
+      );
+      if (this.verbose) {
+        console.log(`[TestChimp] Ingested ${interactions.length} API operation interaction(s)`);
+      }
+    } catch (error) {
+      if (error instanceof AxiosError) {
+        const status = error.response?.status;
+        const message = error.response?.data?.message || error.message;
+        console.error(`[TestChimp] ingest_api_operation_interactions error (${status}): ${message}`);
+      } else {
+        console.error('[TestChimp] ingest_api_operation_interactions failed:', error);
+      }
     }
   }
 

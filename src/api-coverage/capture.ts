@@ -12,12 +12,13 @@
  * Body read timeout: TESTCHIMP_API_COVERAGE_BODY_TIMEOUT_MS (default 1500).
  * Drain timeout: TESTCHIMP_API_COVERAGE_DRAIN_TIMEOUT_MS (default 5000).
  *
- * Mocked vs real: interactions default to REAL. To mark a route as MOCKED, fulfill it via
- * {@link fulfillMocked} instead of `route.fulfill(...)` directly — it stamps a response header
- * this module checks for. Playwright gives no generic way to detect route interception otherwise.
+ * Mocked vs real: native Playwright `route.fulfill(...)` calls are detected automatically.
+ * Playwright does not expose this on Response, so route handlers registered after capture attaches
+ * are instrumented in-process. Instrumentation is best-effort and must never alter route behavior.
  */
 import type { Page, Request, Route } from '@playwright/test';
 
+/** @deprecated Mock detection no longer relies on response headers. */
 export const TESTCHIMP_MOCKED_HEADER = 'x-testchimp-mocked';
 
 /** Name of the per-test Playwright attachment carrying buffered interactions (JSON array). */
@@ -134,6 +135,11 @@ export function buildApiCoverageUrlRegex(): RegExp | null {
 const PAYLOAD_MAX = 65536;
 const BUFFER_KEY = '__testchimpApiCoverageBuffers';
 const PENDING_KEY = '__testchimpApiCoveragePending';
+const ROUTING_INSTRUMENTED = Symbol('testchimpApiCoverageRoutingInstrumented');
+const ROUTE_FULFILL_INSTRUMENTED = Symbol('testchimpApiCoverageRouteFulfillInstrumented');
+
+/** Shared across pages in a worker so context-level routes can mark the owning page's request. */
+const fulfilledRequests = new WeakSet<object>();
 
 const SKIP_RESOURCE_TYPES = new Set([
   'image',
@@ -318,14 +324,161 @@ async function bodyToApiPayload(
 }
 
 /**
- * Fulfill a route as mocked and mark the request for coverage (interactionType=MOCKED).
+ * @deprecated Use Playwright's `route.fulfill(...)`; mocked coverage is detected automatically.
+ * Kept as a no-header fallback for handlers registered before capture instrumentation attaches.
  */
 export async function fulfillMocked(
   route: Route,
   options: Parameters<Route['fulfill']>[0]
 ): Promise<void> {
-  const headers = { ...(options?.headers || {}), [TESTCHIMP_MOCKED_HEADER]: '1' };
-  await route.fulfill({ ...options, headers });
+  const request = markFulfilledRequest(route);
+  try {
+    await route.fulfill(options);
+  } catch (error) {
+    if (request) fulfilledRequests.delete(request);
+    throw error;
+  }
+}
+
+type RouteAugmented = Route & {
+  [ROUTE_FULFILL_INSTRUMENTED]?: boolean;
+};
+
+type RoutingTarget = Pick<Page, 'route' | 'unroute'> & {
+  [ROUTING_INSTRUMENTED]?: boolean;
+};
+
+function markFulfilledRequest(route: Route): object | undefined {
+  try {
+    const request = route.request() as object;
+    fulfilledRequests.add(request);
+    return request;
+  } catch {
+    // Classification is best-effort; never interfere with Playwright route handling.
+    return undefined;
+  }
+}
+
+/**
+ * Mark a routed request immediately before Playwright fulfills it.
+ *
+ * P0: every instrumentation operation is isolated from the original fulfill call. Even if
+ * marking fails, the original fulfill is called exactly once with unchanged arguments and its
+ * fulfillment or rejection is propagated.
+ */
+function instrumentRouteFulfill(route: Route): void {
+  const fulfillDescriptor = Object.getOwnPropertyDescriptor(route, 'fulfill');
+  let fulfillReplaced = false;
+  try {
+    const augmented = route as RouteAugmented;
+    if (augmented[ROUTE_FULFILL_INSTRUMENTED]) return;
+
+    const originalFulfill = route.fulfill.bind(route);
+    const instrumentedFulfill: Route['fulfill'] = (options) => {
+      const request = markFulfilledRequest(route);
+      try {
+        const result = originalFulfill(options);
+        if (!request) return result;
+        return result.catch((error) => {
+          fulfilledRequests.delete(request);
+          throw error;
+        });
+      } catch (error) {
+        if (request) fulfilledRequests.delete(request);
+        throw error;
+      }
+    };
+
+    Object.defineProperty(augmented, 'fulfill', {
+      configurable: true,
+      value: instrumentedFulfill,
+      writable: true,
+    });
+    fulfillReplaced = true;
+    Object.defineProperty(augmented, ROUTE_FULFILL_INSTRUMENTED, {
+      configurable: true,
+      value: true,
+    });
+  } catch {
+    // Roll back a partial install; a changed/non-extensible Route remains usable but unclassified.
+    try {
+      if (fulfillReplaced) {
+        if (fulfillDescriptor) Object.defineProperty(route, 'fulfill', fulfillDescriptor);
+        else delete (route as Partial<Route>).fulfill;
+      }
+    } catch {
+      // Extremely defensive: standard Playwright Route objects are configurable/extensible.
+    }
+  }
+}
+
+/**
+ * Wrap subsequently registered route handlers while preserving `unroute(url, handler)` identity.
+ * Install failures are deliberately ignored: missing mocked coverage is preferable to test impact.
+ */
+function instrumentRoutingTarget(target: RoutingTarget): void {
+  const routeDescriptor = Object.getOwnPropertyDescriptor(target, 'route');
+  const unrouteDescriptor = Object.getOwnPropertyDescriptor(target, 'unroute');
+  let routeReplaced = false;
+  let unrouteReplaced = false;
+  try {
+    if (target[ROUTING_INSTRUMENTED]) return;
+
+    const originalRoute = target.route.bind(target);
+    const originalUnroute = target.unroute.bind(target);
+    const wrappedHandlers = new WeakMap<
+      Parameters<Page['route']>[1],
+      Parameters<Page['route']>[1]
+    >();
+
+    const instrumentedRoute: Page['route'] = async (url, handler, options) => {
+      let wrappedHandler = wrappedHandlers.get(handler);
+      if (!wrappedHandler) {
+        wrappedHandler = (route, request) => {
+          instrumentRouteFulfill(route);
+          return handler(route, request);
+        };
+        wrappedHandlers.set(handler, wrappedHandler);
+      }
+      return originalRoute(url, wrappedHandler, options);
+    };
+
+    const instrumentedUnroute: Page['unroute'] = async (url, handler) => {
+      if (!handler) return originalUnroute(url);
+      return originalUnroute(url, wrappedHandlers.get(handler) ?? handler);
+    };
+
+    Object.defineProperty(target, 'route', {
+      configurable: true,
+      value: instrumentedRoute,
+      writable: true,
+    });
+    routeReplaced = true;
+    Object.defineProperty(target, 'unroute', {
+      configurable: true,
+      value: instrumentedUnroute,
+      writable: true,
+    });
+    unrouteReplaced = true;
+    Object.defineProperty(target, ROUTING_INSTRUMENTED, {
+      configurable: true,
+      value: true,
+    });
+  } catch {
+    // Roll back partial installation so route/unroute semantics cannot diverge.
+    try {
+      if (routeReplaced) {
+        if (routeDescriptor) Object.defineProperty(target, 'route', routeDescriptor);
+        else delete (target as Partial<RoutingTarget>).route;
+      }
+      if (unrouteReplaced) {
+        if (unrouteDescriptor) Object.defineProperty(target, 'unroute', unrouteDescriptor);
+        else delete (target as Partial<RoutingTarget>).unroute;
+      }
+    } catch {
+      // Extremely defensive: standard Playwright objects are configurable/extensible.
+    }
+  }
 }
 
 function pushInteraction(page: Page, interaction: ApiOperationInteractionPayload): void {
@@ -352,6 +505,18 @@ export function attachApiCoverageCapture(
   const capturePayloads = opts?.capturePayloads !== false;
   const bodyTimeoutMs = resolveApiCoverageBodyTimeoutMs();
 
+  if (typeof p.route === 'function' && typeof p.unroute === 'function') {
+    instrumentRoutingTarget(p);
+  }
+  try {
+    const context = p.context();
+    if (typeof context.route === 'function' && typeof context.unroute === 'function') {
+      instrumentRoutingTarget(context);
+    }
+  } catch {
+    // Fake/closed pages or changed Playwright APIs: response capture still remains usable.
+  }
+
   page.on('request', (req: Request) => {
     starts.set(req as object, Date.now());
   });
@@ -371,9 +536,8 @@ export function attachApiCoverageCapture(
         const rt = Math.max(0, Date.now() - start);
         const reqCt = req.headers()['content-type'];
         const resCt = response.headers()['content-type'];
-        const mocked =
-          !!req.headers()[TESTCHIMP_MOCKED_HEADER] ||
-          !!response.headers()[TESTCHIMP_MOCKED_HEADER];
+        // Consume the marker: each Playwright Request has at most one response.
+        const mocked = fulfilledRequests.delete(req as object);
 
         let requestPayload: ApiPayload | undefined;
         if (capturePayloads) {

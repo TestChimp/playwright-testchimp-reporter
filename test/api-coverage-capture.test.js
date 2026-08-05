@@ -214,3 +214,256 @@ test('attachApiCoverageCapture omits payload when body read hangs past timeout',
   assert.equal(out[0].endpoint, '/v1/slow');
   assert.equal(out[0].responsePayload, undefined);
 });
+
+function captureTestPage(context) {
+  const handlers = {};
+  let registeredHandler;
+  let unroutedHandler;
+  const page = {
+    on(event, fn) {
+      handlers[event] = fn;
+    },
+    async route(_url, handler) {
+      registeredHandler = handler;
+    },
+    async unroute(_url, handler) {
+      unroutedHandler = handler;
+    },
+    context() {
+      if (!context) throw new Error('no context in unit fake');
+      return context;
+    },
+  };
+  return {
+    handlers,
+    page,
+    registeredHandler: () => registeredHandler,
+    unroutedHandler: () => unroutedHandler,
+  };
+}
+
+function captureRequest(url = 'https://api.example.com/v1/mocked') {
+  return {
+    url: () => url,
+    method: () => 'GET',
+    resourceType: () => 'fetch',
+    headers: () => ({}),
+    postData: () => null,
+  };
+}
+
+function emitCaptureResponse(handlers, req) {
+  handlers.response({
+    request: () => req,
+    status: () => 200,
+    headers: () => ({ 'content-type': 'application/json' }),
+    text: async () => '{"mocked":true}',
+  });
+}
+
+test('plain route.fulfill is detected as MOCKED without changing fulfill options', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  const options = { status: 201, json: { mocked: true } };
+  let receivedOptions;
+  const userHandler = (route) => route.fulfill(options);
+  await fake.page.route('**/v1/mocked', userHandler);
+
+  const req = captureRequest();
+  const route = {
+    request: () => req,
+    fulfill: (actualOptions) => {
+      receivedOptions = actualOptions;
+      // Emit synchronously to prove the request is marked before fulfill can produce a response.
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+  };
+  await fake.registeredHandler()(route, req);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(receivedOptions, options);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.MOCKED);
+
+  await fake.page.unroute('**/v1/mocked', userHandler);
+  assert.equal(fake.unroutedHandler(), fake.registeredHandler());
+});
+
+test('legacy fulfillMocked marks without adding a response header', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    fulfillMocked,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  const req = captureRequest('https://api.example.com/v1/legacy-mock');
+  const options = { status: 200, headers: { 'x-existing': 'kept' } };
+  let receivedOptions;
+  await fulfillMocked({
+    request: () => req,
+    fulfill: (actualOptions) => {
+      receivedOptions = actualOptions;
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+  }, options);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(receivedOptions, options);
+  assert.deepEqual(receivedOptions.headers, { 'x-existing': 'kept' });
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.MOCKED);
+});
+
+test('route.continue remains REAL', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  await fake.page.route('**/v1/real', (route) => route.continue());
+  const req = captureRequest('https://api.example.com/v1/real');
+  const route = {
+    request: () => req,
+    continue: () => {
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+    fulfill: () => Promise.resolve(),
+  };
+  await fake.registeredHandler()(route, req);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.REAL);
+});
+
+test('classification failure never prevents the original fulfill', async () => {
+  const { attachApiCoverageCapture } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  let fulfillCalls = 0;
+  await fake.page.route('**/*', (route) => route.fulfill({ status: 200 }));
+  await fake.registeredHandler()({
+    // WeakSet rejects primitives; instrumentation must swallow that and still fulfill.
+    request: () => 1,
+    fulfill: () => {
+      fulfillCalls += 1;
+      return Promise.resolve();
+    },
+  });
+  assert.equal(fulfillCalls, 1);
+});
+
+test('original fulfill rejection is preserved', async () => {
+  const { attachApiCoverageCapture } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  const expected = new Error('Playwright fulfill failed');
+  await fake.page.route('**/*', (route) => route.fulfill({ status: 200 }));
+  await assert.rejects(
+    fake.registeredHandler()({
+      request: () => captureRequest(),
+      fulfill: () => Promise.reject(expected),
+    }),
+    expected
+  );
+});
+
+test('rejected fulfill does not taint a later continued response as MOCKED', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  await fake.page.route('**/*', async (route) => {
+    await assert.rejects(route.fulfill({ status: 200 }), /fulfill failed/);
+    await route.continue();
+  });
+  const req = captureRequest('https://api.example.com/v1/fallback-real');
+  await fake.registeredHandler()({
+    request: () => req,
+    fulfill: () => Promise.reject(new Error('fulfill failed')),
+    continue: () => {
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+  }, req);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.REAL);
+});
+
+test('partial routing instrumentation failure restores original route method', async () => {
+  const { attachApiCoverageCapture } = require('../dist/api-coverage/capture');
+  const handlers = {};
+  let originalRouteCalls = 0;
+  const originalRoute = async () => {
+    originalRouteCalls += 1;
+  };
+  const page = {
+    on(event, fn) {
+      handlers[event] = fn;
+    },
+    route: originalRoute,
+  };
+  Object.defineProperty(page, 'unroute', {
+    configurable: false,
+    value: async () => {},
+    writable: false,
+  });
+
+  attachApiCoverageCapture(page, { capturePayloads: false });
+  assert.equal(page.route, originalRoute);
+  await page.route('**/*', () => {});
+  assert.equal(originalRouteCalls, 1);
+});
+
+test('context.route fulfill is detected for the page response', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  let contextHandler;
+  const context = {
+    async route(_url, handler) {
+      contextHandler = handler;
+    },
+    async unroute() {},
+  };
+  const fake = captureTestPage(context);
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  await context.route('**/v1/context-mock', (route) => route.fulfill({ status: 200 }));
+  const req = captureRequest('https://api.example.com/v1/context-mock');
+  await contextHandler({
+    request: () => req,
+    fulfill: () => {
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+  }, req);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.MOCKED);
+});

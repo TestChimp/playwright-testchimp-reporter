@@ -124,9 +124,14 @@ export TESTCHIMP_ENABLE_API_CAPTURE=1
 npx playwright test
 ```
 
-Capture is best-effort and bounded (body / drain timeouts above) so it must not hang test teardown. Native Playwright mocks registered with `page.route(...)` or `context.route(...)` and completed with `route.fulfill(...)` are automatically classified as mocked; no special helper or response header is required. Routes that continue to the network remain real.
+Capture is best-effort and bounded (body / drain timeouts above) so it must not hang test teardown. Native Playwright mocks registered with `page.route(...)` / `context.route(...)` **after** the TestChimp page fixture attaches, and completed with `route.fulfill(...)`, are automatically classified as mocked. Routes that continue/fallback/abort to the network remain real.
 
-Mock classification is also best-effort. Routes registered before the TestChimp page fixture attaches, HAR replay, service-worker-based tools such as MSW, and non-Playwright mocking layers may not be identifiable and therefore default to real. Classification never changes fulfill options or blocks a route. Project **Operations** config can further restrict which URLs are stored and whether payloads are retained.
+Mock classification is also best-effort:
+- Routes registered **before** the page fixture attaches are not instrumented. Use `fulfillMocked(route, options)` (or stamp `x-testchimp-mocked: 1`) for those handlers.
+- `routeFromHAR(...)` after attach that fulfills through Playwright routing is classified as mocked.
+- Service-worker-based tools such as MSW, and non-Playwright mocking layers, may not be identifiable and therefore default to real.
+
+Classification never changes fulfill options or blocks a route. Project **Operations** config can further restrict which URLs are stored and whether payloads are retained.
 
 ### 3. Run tests
 

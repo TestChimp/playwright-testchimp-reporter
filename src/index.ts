@@ -69,8 +69,9 @@ export { DataSourceEnum } from './explorechimp/agents-explorechimp-json';
 /**
  * API operation coverage capture (US-185). Installed automatically for the `page` fixture by
  * `installTestChimp` / `installTrueCoverage` (see `./runtime`). Native Playwright
- * `route.fulfill(...)` responses are automatically classified as MOCKED. `fulfillMocked` and
- * `TESTCHIMP_MOCKED_HEADER` remain exported only for source compatibility.
+ * `route.fulfill(...)` responses registered after that fixture attaches are automatically
+ * classified as MOCKED. `fulfillMocked` is the escape hatch for pre-attach handlers;
+ * `TESTCHIMP_MOCKED_HEADER` remains a legacy opt-in marker.
  */
 export {
   API_COVERAGE_ATTACHMENT_NAME,

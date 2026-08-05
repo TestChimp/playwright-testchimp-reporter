@@ -412,6 +412,75 @@ test('rejected fulfill does not taint a later continued response as MOCKED', asy
   assert.equal(out[0].interactionType, ApiOperationInteractionType.REAL);
 });
 
+test('sync continue after non-awaited rejected fulfill stays REAL', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  await fake.page.route('**/*', (route) => {
+    void route.fulfill({ status: 200 }).catch(() => {});
+    return route.continue();
+  });
+  const req = captureRequest('https://api.example.com/v1/sync-continue');
+  await fake.registeredHandler()({
+    request: () => req,
+    fulfill: () => Promise.reject(new Error('fulfill failed')),
+    continue: () => {
+      // Response observed before fulfill rejection microtask cleanup would otherwise taint MOCKED.
+      emitCaptureResponse(fake.handlers, req);
+      return Promise.resolve();
+    },
+  }, req);
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.REAL);
+});
+
+test('legacy x-testchimp-mocked response header still marks MOCKED', async () => {
+  const {
+    attachApiCoverageCapture,
+    drainApiCoverageInteractions,
+    ApiOperationInteractionType,
+    TESTCHIMP_MOCKED_HEADER,
+  } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  const req = captureRequest('https://api.example.com/v1/header-mock');
+  fake.handlers.response({
+    request: () => req,
+    status: () => 200,
+    headers: () => ({
+      'content-type': 'application/json',
+      [TESTCHIMP_MOCKED_HEADER]: '1',
+    }),
+    text: async () => '{"mocked":true}',
+  });
+
+  const out = await drainApiCoverageInteractions(fake.page);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].interactionType, ApiOperationInteractionType.MOCKED);
+});
+
+test('non-thenable fulfill return does not throw into the test', async () => {
+  const { attachApiCoverageCapture } = require('../dist/api-coverage/capture');
+  const fake = captureTestPage();
+  attachApiCoverageCapture(fake.page, { capturePayloads: false });
+
+  await fake.page.route('**/*', async (route) => {
+    await route.fulfill({ status: 200 });
+  });
+  await fake.registeredHandler()({
+    request: () => captureRequest(),
+    fulfill: () => undefined,
+  });
+});
+
 test('partial routing instrumentation failure restores original route method', async () => {
   const { attachApiCoverageCapture } = require('../dist/api-coverage/capture');
   const handlers = {};

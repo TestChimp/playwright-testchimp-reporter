@@ -18,7 +18,10 @@
  */
 import type { Page, Request, Route } from '@playwright/test';
 
-/** @deprecated Mock detection no longer relies on response headers. */
+/**
+ * Legacy optional response/request header that still marks an interaction as MOCKED.
+ * Prefer automatic `route.fulfill` detection (or {@link fulfillMocked} for pre-attach handlers).
+ */
 export const TESTCHIMP_MOCKED_HEADER = 'x-testchimp-mocked';
 
 /** Name of the per-test Playwright attachment carrying buffered interactions (JSON array). */
@@ -324,8 +327,8 @@ async function bodyToApiPayload(
 }
 
 /**
- * @deprecated Use Playwright's `route.fulfill(...)`; mocked coverage is detected automatically.
- * Kept as a no-header fallback for handlers registered before capture instrumentation attaches.
+ * Explicit MOCKED marker for route handlers registered before capture instrumentation attaches.
+ * Prefer ordinary `route.fulfill(...)` after the TestChimp page fixture has attached.
  */
 export async function fulfillMocked(
   route: Route,
@@ -359,16 +362,45 @@ function markFulfilledRequest(route: Route): object | undefined {
   }
 }
 
+function clearFulfilledRequest(route: Route): void {
+  try {
+    fulfilledRequests.delete(route.request() as object);
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function hasLegacyMockedHeader(req: Request, response: { headers: () => Record<string, string> }): boolean {
+  try {
+    return !!req.headers()[TESTCHIMP_MOCKED_HEADER] || !!response.headers()[TESTCHIMP_MOCKED_HEADER];
+  } catch {
+    return false;
+  }
+}
+
+function replaceRouteMethod<K extends keyof Route>(
+  route: Route,
+  methodName: K,
+  value: Route[K]
+): PropertyDescriptor | undefined {
+  const previous = Object.getOwnPropertyDescriptor(route, methodName as string);
+  Object.defineProperty(route, methodName as string, {
+    configurable: true,
+    value,
+    writable: true,
+  });
+  return previous;
+}
+
 /**
- * Mark a routed request immediately before Playwright fulfills it.
+ * Instrument a Route so fulfill marks MOCKED, while continue/fallback/abort clear any pending mark.
  *
- * P0: every instrumentation operation is isolated from the original fulfill call. Even if
- * marking fails, the original fulfill is called exactly once with unchanged arguments and its
+ * P0: every instrumentation operation is isolated from the original Playwright call. Even if
+ * marking fails, the original method is called exactly once with unchanged arguments and its
  * fulfillment or rejection is propagated.
  */
 function instrumentRouteFulfill(route: Route): void {
-  const fulfillDescriptor = Object.getOwnPropertyDescriptor(route, 'fulfill');
-  let fulfillReplaced = false;
+  const replaced: Array<{ name: keyof Route; descriptor: PropertyDescriptor | undefined }> = [];
   try {
     const augmented = route as RouteAugmented;
     if (augmented[ROUTE_FULFILL_INSTRUMENTED]) return;
@@ -379,7 +411,8 @@ function instrumentRouteFulfill(route: Route): void {
       try {
         const result = originalFulfill(options);
         if (!request) return result;
-        return result.catch((error) => {
+        // Normalize thenables so a non-Promise return cannot throw TypeError into the test.
+        return Promise.resolve(result).catch((error) => {
           fulfilledRequests.delete(request);
           throw error;
         });
@@ -389,25 +422,37 @@ function instrumentRouteFulfill(route: Route): void {
       }
     };
 
-    Object.defineProperty(augmented, 'fulfill', {
-      configurable: true,
-      value: instrumentedFulfill,
-      writable: true,
-    });
-    fulfillReplaced = true;
+    const clearAndForward =
+      <M extends 'continue' | 'fallback' | 'abort'>(methodName: M): Route[M] => {
+        const original = route[methodName].bind(route) as Route[M];
+        return ((...args: Parameters<Route[M]>) => {
+          clearFulfilledRequest(route);
+          return (original as (...a: Parameters<Route[M]>) => ReturnType<Route[M]>)(...args);
+        }) as Route[M];
+      };
+
+    replaced.push({ name: 'fulfill', descriptor: replaceRouteMethod(route, 'fulfill', instrumentedFulfill) });
+    for (const methodName of ['continue', 'fallback', 'abort'] as const) {
+      if (typeof route[methodName] !== 'function') continue;
+      replaced.push({
+        name: methodName,
+        descriptor: replaceRouteMethod(route, methodName, clearAndForward(methodName)),
+      });
+    }
     Object.defineProperty(augmented, ROUTE_FULFILL_INSTRUMENTED, {
       configurable: true,
       value: true,
     });
   } catch {
     // Roll back a partial install; a changed/non-extensible Route remains usable but unclassified.
-    try {
-      if (fulfillReplaced) {
-        if (fulfillDescriptor) Object.defineProperty(route, 'fulfill', fulfillDescriptor);
-        else delete (route as Partial<Route>).fulfill;
+    for (let i = replaced.length - 1; i >= 0; i -= 1) {
+      const { name, descriptor } = replaced[i]!;
+      try {
+        if (descriptor) Object.defineProperty(route, name as string, descriptor);
+        else delete (route as Partial<Route>)[name];
+      } catch {
+        // Extremely defensive: standard Playwright Route objects are configurable/extensible.
       }
-    } catch {
-      // Extremely defensive: standard Playwright Route objects are configurable/extensible.
     }
   }
 }
@@ -537,7 +582,9 @@ export function attachApiCoverageCapture(
         const reqCt = req.headers()['content-type'];
         const resCt = response.headers()['content-type'];
         // Consume the marker: each Playwright Request has at most one response.
-        const mocked = fulfilledRequests.delete(req as object);
+        // Legacy header remains a supported opt-in for pre-instrumentation handlers.
+        const mocked =
+          fulfilledRequests.delete(req as object) || hasLegacyMockedHeader(req, response);
 
         let requestPayload: ApiPayload | undefined;
         if (capturePayloads) {

@@ -525,8 +525,8 @@ export class TestChimpReporter implements Reporter {
    * US-185: read the buffered API operation interactions attached by the `page` fixture
    * (see runtime.ts `extendWebTrueCoveragePage`) and forward them for ingest, filling in
    * whatever test/execution identity is available at the call site. Best-effort — never
-   * throws, and no-ops when the attachment is absent (e.g. TESTCHIMP_API_COVERAGE=0, no page
-   * fixture used, or no matching traffic observed).
+   * throws, and no-ops when the attachment is absent (e.g. TESTCHIMP_ENABLE_API_CAPTURE unset,
+   * no page fixture used, or no matching traffic observed).
    */
   private async ingestApiCoverageIfPresent(
     result: TestResult,

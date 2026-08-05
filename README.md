@@ -101,6 +101,10 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
+| `TESTCHIMP_ENABLE_API_CAPTURE` | No | Set to `1`/`true`/`yes` to opt in to API operation capture + payload ingest (default **off**). |
+| `TESTCHIMP_API_COVERAGE_URL_REGEX` | No | Optional client-side URL allow-list regex (full URL). |
+| `TESTCHIMP_API_COVERAGE_BODY_TIMEOUT_MS` | No | Per-response body read timeout in ms (default **1500**). |
+| `TESTCHIMP_API_COVERAGE_DRAIN_TIMEOUT_MS` | No | Page teardown drain timeout in ms (default **5000**). |
 | `TESTCHIMP_RUM_AUTOMATION_SET_PREFIX` | No | Override set-URL prefix (default `testchimp-rum://truecoverage/v1/set?p=` + base64url JSON). |
 | `TESTCHIMP_RUM_AUTOMATION_CLEAR_URL` | No | Override clear URL (default `testchimp-rum://truecoverage/v1/clear`). |
 | `TESTCHIMP_RUM_AUTOMATION_CLEAR_BETWEEN_TESTS` | No | When `1`/`true`/`yes`, each test’s **`device`** fixture sends `/v1/clear` before `SET` (legacy). **Default off** so CI stays set until overwritten, avoiding null `ci_test_info` on RUM during the clear→set window. |
@@ -109,6 +113,18 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_RUM_WEB_FLUSH_TIMEOUT_MS` | No | Web `page` fixture: per-call timeout for RUM flush `page.evaluate` (default **5000**, clamp **100–30000**). |
 
 If `TESTCHIMP_API_KEY` is missing, the reporter logs a warning and disables reporting (no request is sent).
+
+### API operation capture (Operations coverage)
+
+**Off by default.** Set **`TESTCHIMP_ENABLE_API_CAPTURE=1`** to enable both HTTP interaction capture (via the web `page` fixture from `installTestChimp`) and reporter ingest of those interactions. One flag controls both; leave it unset so the plugin never attaches network listeners or reads response bodies.
+
+```bash
+export TESTCHIMP_API_KEY=your-api-key
+export TESTCHIMP_ENABLE_API_CAPTURE=1
+npx playwright test
+```
+
+Capture is best-effort and bounded (body / drain timeouts above) so it must not hang test teardown. Project **Operations** config can further restrict which URLs are stored and whether payloads are retained.
 
 ### 3. Run tests
 

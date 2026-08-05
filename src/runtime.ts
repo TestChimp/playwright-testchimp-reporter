@@ -74,6 +74,7 @@ function extendWebTrueCoveragePage(test: any): any {
         try {
           attachApiCoverageCapture(page, {
             urlRegex: buildApiCoverageUrlRegex(),
+            // Same opt-in as isApiCoverageEnabled (TESTCHIMP_ENABLE_API_CAPTURE).
             capturePayloads: apiCoveragePayloadsEnabled(),
           });
         } catch (err) {

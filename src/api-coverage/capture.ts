@@ -2,10 +2,15 @@
  * API operation coverage capture for Playwright (US-185).
  * Collects HTTP interactions; ingest is append-only (no coverage math client-side).
  *
- * Enable/disable via TESTCHIMP_API_COVERAGE (default on; set to '0'/'false' to opt out).
+ * P0: never disrupt test execution. Body reads and drain are hard-timeout’d; on timeout we
+ * keep metadata (or drop the interaction) rather than hang fixture teardown.
+ *
+ * Opt-in via TESTCHIMP_ENABLE_API_CAPTURE=1 (default off). One flag enables page capture,
+ * payload reads, attachment, and reporter ingest together — leave unset to avoid any impact
+ * on test execution from API capturing.
  * Scope capture to matching URLs via TESTCHIMP_API_COVERAGE_URL_REGEX (optional; matches full URL).
- * Disable request/response body capture via TESTCHIMP_API_COVERAGE_PAYLOADS=0 (default on;
- * mirrors ProjectConfig.operationsConfig.disablePayloadTrackingInTests).
+ * Body read timeout: TESTCHIMP_API_COVERAGE_BODY_TIMEOUT_MS (default 1500).
+ * Drain timeout: TESTCHIMP_API_COVERAGE_DRAIN_TIMEOUT_MS (default 5000).
  *
  * Mocked vs real: interactions default to REAL. To mark a route as MOCKED, fulfill it via
  * {@link fulfillMocked} instead of `route.fulfill(...)` directly — it stamps a response header
@@ -78,14 +83,39 @@ function envFlag(name: string, defaultValue: boolean): boolean {
   return raw !== '0' && raw !== 'false' && raw !== 'no';
 }
 
-/** Whether page-level API coverage capture should be installed (default on). */
-export function isApiCoverageEnabled(): boolean {
-  return envFlag('TESTCHIMP_API_COVERAGE', true);
+function envTimeoutMs(name: string, defaultMs: number, minMs: number, maxMs: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return defaultMs;
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return defaultMs;
+  return Math.max(minMs, Math.min(maxMs, n));
 }
 
-/** Whether request/response bodies should be captured (default on). */
+/**
+ * Whether API operation capture + payload ingest should run.
+ * Controlled solely by TESTCHIMP_ENABLE_API_CAPTURE (default off / unset).
+ * Truthy: 1, true, yes. Falsy / unset: disabled.
+ */
+export function isApiCoverageEnabled(): boolean {
+  return envFlag('TESTCHIMP_ENABLE_API_CAPTURE', false);
+}
+
+/**
+ * Payload capture follows the same opt-in as {@link isApiCoverageEnabled}.
+ * Kept as a named export for callers that previously branched on payloads separately.
+ */
 export function apiCoveragePayloadsEnabled(): boolean {
-  return envFlag('TESTCHIMP_API_COVERAGE_PAYLOADS', true);
+  return isApiCoverageEnabled();
+}
+
+/** Per-response body read cap so SSE/long-poll cannot hang the pending set. */
+export function resolveApiCoverageBodyTimeoutMs(): number {
+  return envTimeoutMs('TESTCHIMP_API_COVERAGE_BODY_TIMEOUT_MS', 1500, 50, 10_000);
+}
+
+/** Fixture-teardown drain budget (same spirit as RUM flush). */
+export function resolveApiCoverageDrainTimeoutMs(): number {
+  return envTimeoutMs('TESTCHIMP_API_COVERAGE_DRAIN_TIMEOUT_MS', 5000, 100, 30_000);
 }
 
 /** Optional URL allow-list regex from TESTCHIMP_API_COVERAGE_URL_REGEX (matches full URL). */
@@ -104,6 +134,19 @@ export function buildApiCoverageUrlRegex(): RegExp | null {
 const PAYLOAD_MAX = 65536;
 const BUFFER_KEY = '__testchimpApiCoverageBuffers';
 const PENDING_KEY = '__testchimpApiCoveragePending';
+
+const SKIP_RESOURCE_TYPES = new Set([
+  'image',
+  'media',
+  'font',
+  'stylesheet',
+  'script',
+  'document',
+  'websocket',
+  'eventsource',
+  'manifest',
+  'texttrack',
+]);
 
 type PageAugmented = Page & {
   [BUFFER_KEY]?: ApiOperationInteractionPayload[];
@@ -158,16 +201,28 @@ function truncate(s: string | null | undefined): string | undefined {
   return s.length <= PAYLOAD_MAX ? s : s.slice(0, PAYLOAD_MAX);
 }
 
+/** Binary / multipart / streaming content types — never call response.text(). */
 function isSkippableContentType(ct: string | undefined): boolean {
   if (!ct) return false;
   const c = ct.toLowerCase();
   return (
     c.includes('multipart/form-data') ||
     c.includes('octet-stream') ||
+    c.includes('text/event-stream') ||
+    c.includes('text/html') ||
     c.startsWith('image/') ||
     c.startsWith('video/') ||
     c.startsWith('audio/')
   );
+}
+
+/** Statuses with no useful body — skip body read. */
+export function shouldSkipBodyForStatus(status: number): boolean {
+  return status < 200 || status === 204 || status === 304;
+}
+
+export function shouldSkipResourceType(resourceType: string): boolean {
+  return SKIP_RESOURCE_TYPES.has(resourceType);
 }
 
 function isJsonContentType(ct: string | undefined): boolean {
@@ -231,16 +286,33 @@ function textToApiPayload(contentType: string | undefined, text: string | null |
   }
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function bodyToApiPayload(
   contentType: string | undefined,
-  getText: () => Promise<string>
+  getText: () => Promise<string>,
+  timeoutMs: number
 ): Promise<ApiPayload | undefined> {
   if (isSkippableContentType(contentType)) {
     return { kind: ApiPayloadKind.OMITTED, contentType };
   }
   try {
-    return textToApiPayload(contentType, await getText());
+    const text = await withTimeout(getText(), timeoutMs);
+    return textToApiPayload(contentType, text);
   } catch {
+    // Timeout or body read failure: omit payload rather than fail the test.
     return undefined;
   }
 }
@@ -254,6 +326,14 @@ export async function fulfillMocked(
 ): Promise<void> {
   const headers = { ...(options?.headers || {}), [TESTCHIMP_MOCKED_HEADER]: '1' };
   await route.fulfill({ ...options, headers });
+}
+
+function pushInteraction(page: Page, interaction: ApiOperationInteractionPayload): void {
+  const buf = getBuffers(page);
+  buf.push(interaction);
+  if (buf.length > 500) {
+    buf.splice(0, buf.length - 500);
+  }
 }
 
 /**
@@ -270,6 +350,7 @@ export function attachApiCoverageCapture(
   const starts = new WeakMap<object, number>();
   const regex = opts?.urlRegex ?? null;
   const capturePayloads = opts?.capturePayloads !== false;
+  const bodyTimeoutMs = resolveApiCoverageBodyTimeoutMs();
 
   page.on('request', (req: Request) => {
     starts.set(req as object, Date.now());
@@ -281,17 +362,11 @@ export function attachApiCoverageCapture(
         const req = response.request();
         const url = req.url();
         if (regex && !regex.test(url)) return;
-        // Skip binary navigations / assets loosely
         const resourceType = req.resourceType();
-        if (
-          resourceType === 'image' ||
-          resourceType === 'media' ||
-          resourceType === 'font' ||
-          resourceType === 'stylesheet' ||
-          resourceType === 'script'
-        ) {
+        if (shouldSkipResourceType(resourceType)) {
           return;
         }
+        const status = response.status();
         const start = starts.get(req as object) ?? Date.now();
         const rt = Math.max(0, Date.now() - start);
         const reqCt = req.headers()['content-type'];
@@ -312,15 +387,17 @@ export function attachApiCoverageCapture(
           }
         }
 
-        const responsePayload = capturePayloads
-          ? await bodyToApiPayload(resCt, () => response.text())
-          : undefined;
+        let responsePayload: ApiPayload | undefined;
+        if (capturePayloads && !shouldSkipBodyForStatus(status) && !isSkippableContentType(resCt)) {
+          responsePayload = await bodyToApiPayload(resCt, () => response.text(), bodyTimeoutMs);
+        } else if (capturePayloads && isSkippableContentType(resCt)) {
+          responsePayload = { kind: ApiPayloadKind.OMITTED, contentType: resCt };
+        }
 
-        const buf = getBuffers(page);
-        buf.push({
+        pushInteraction(page, {
           endpoint: stripPath(url),
           httpMethod: req.method(),
-          responseCode: response.status(),
+          responseCode: status,
           requestPayload,
           responsePayload,
           queryParams: parseQueryParams(url),
@@ -328,11 +405,8 @@ export function attachApiCoverageCapture(
           testMode: ApiOperationTestMode.AUTOMATION,
           interactionType: mocked ? ApiOperationInteractionType.MOCKED : ApiOperationInteractionType.REAL,
         });
-        if (buf.length > 500) {
-          buf.splice(0, buf.length - 500);
-        }
       } catch {
-        /* ignore */
+        /* ignore — capture must never throw into the test */
       }
     })();
     const pending = getPending(page);
@@ -341,11 +415,19 @@ export function attachApiCoverageCapture(
   });
 }
 
-/** Wait for in-flight response handlers, then drain the buffer (call from fixture teardown). */
+/**
+ * Wait (bounded) for in-flight response handlers, then drain the buffer.
+ * On drain timeout, returns whatever is already buffered and abandons remaining pending work.
+ */
 export async function drainApiCoverageInteractions(page: Page): Promise<ApiOperationInteractionPayload[]> {
   const pending = getPending(page);
   if (pending.size > 0) {
-    await Promise.allSettled([...pending]);
+    const drainMs = resolveApiCoverageDrainTimeoutMs();
+    try {
+      await withTimeout(Promise.allSettled([...pending]).then(() => undefined), drainMs);
+    } catch {
+      // Abandon unfinished body reads; do not block page fixture teardown.
+    }
   }
   const buf = getBuffers(page);
   const copy = buf.slice();

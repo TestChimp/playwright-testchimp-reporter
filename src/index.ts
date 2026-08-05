@@ -25,6 +25,8 @@
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
+ * - TESTCHIMP_ENABLE_API_CAPTURE (optional): set to 1/true to opt in to API operation
+ *   capture + payload ingest (default off — no page listeners / no ingest)
  * Runtime (`@testchimp/playwright/runtime`): use `installTrueCoverage` or `installTestChimp` (same behavior).
  * Platform is read from Mobilewright `projects[].use.platform` (`ios`/`android`); omitted means web (`page` fixture).
  * Pass `{ uiFixture: 'screen' }` when wrapping `@mobilewright/test`; default `page` for `@playwright/test`.
@@ -81,6 +83,10 @@ export {
   drainApiCoverageInteractions,
   fulfillMocked,
   isApiCoverageEnabled,
+  resolveApiCoverageBodyTimeoutMs,
+  resolveApiCoverageDrainTimeoutMs,
+  shouldSkipBodyForStatus,
+  shouldSkipResourceType,
   type ApiOperationInteraction,
   type ApiOperationInteractionPayload,
   type ApiPayload,

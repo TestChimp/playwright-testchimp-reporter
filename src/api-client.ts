@@ -317,9 +317,13 @@ export class TestChimpApiClient {
     }
   }
 
-  async platformTestEnd(jobId: string, jobDetail: SmartTestExecutionJobDetail): Promise<void> {
+  async platformTestEnd(
+    jobId: string,
+    jobDetail: SmartTestExecutionJobDetail,
+    durationMs?: number,
+  ): Promise<void> {
     try {
-      const body = { jobId, jobDetail };
+      const body = { jobId, jobDetail, durationMs };
       if (this.verbose) {
         console.log(`[TestChimp] platform/test_end jobId=${jobId} status=${jobDetail.status}`);
       }

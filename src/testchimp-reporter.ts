@@ -57,6 +57,21 @@ interface TestExecutionState {
   attemptNumber: number;
 }
 
+function resolveDurationMs(
+  reportedDurationMs: number | undefined,
+  startedAtMillis: number,
+  completedAtMillis: number,
+): number {
+  if (
+    typeof reportedDurationMs === 'number' &&
+    Number.isFinite(reportedDurationMs) &&
+    reportedDurationMs >= 0
+  ) {
+    return Math.round(reportedDurationMs);
+  }
+  return Math.max(0, Math.round(completedAtMillis - startedAtMillis));
+}
+
 /**
  * Retry tracking info for a test
  */
@@ -866,7 +881,8 @@ export class TestChimpReporter implements Reporter {
         await this.drainPendingForJob(jobId);
       }
       console.log(`[TestChimp] platform/test_end sending: ${test.title} jobId=${jobId}`);
-      const platformTestEndPromise = this.apiClient!.platformTestEnd(jobId, jobDetail);
+      const durationMs = resolveDurationMs(result.duration, execution.startedAt, Date.now());
+      const platformTestEndPromise = this.apiClient!.platformTestEnd(jobId, jobDetail, durationMs);
       if (this.platformStepEndEnabled) {
         this.pushPendingForJob(jobId, platformTestEndPromise);
       }
@@ -1049,6 +1065,7 @@ export class TestChimpReporter implements Reporter {
     const status = this.mapStatus(result.status);
 
     const executionContext = buildExecutionDeviceContext(test);
+    const completedAtMillis = Date.now();
     const report: SmartTestExecutionReport = {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
@@ -1068,7 +1085,8 @@ export class TestChimpReporter implements Reporter {
         gitCommitSha,
       },
       startedAtMillis: execution.startedAt,
-      completedAtMillis: Date.now(),
+      completedAtMillis,
+      durationMs: resolveDurationMs(result.duration, execution.startedAt, completedAtMillis),
       branchName,
       branchId: branchIdValid,
       gitCommitSha,

@@ -121,6 +121,8 @@ export interface SmartTestExecutionReport {
   /** ExploreChimp: matches the journey execution id and the persisted execution job id after ingest. */
   journeyExecutionId?: string;
   executionContext?: ExecutionDeviceContext;
+  /** Playwright TestResult.duration in milliseconds. */
+  durationMs?: number;
 }
 
 export interface IngestSmartTestExecutionReportRequest {

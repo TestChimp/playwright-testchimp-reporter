@@ -94,6 +94,7 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
     fs.writeFileSync(screenshotPath, TINY_PNG);
 
     const order = [];
+    let ingestedReport;
     let resolveUpload;
     const uploadStarted = new Promise((r) => {
       resolveUpload = r;
@@ -128,7 +129,8 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
         order.push('upload_done');
         return { gcpPath: 'gs://bucket/shot.jpg' };
       },
-      ingestExecutionReport: async () => {
+      ingestExecutionReport: async (report) => {
+        ingestedReport = report;
         order.push('ingest');
         return { jobId: 'job-1', testFound: true };
       },
@@ -167,6 +169,18 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
     assert.deepEqual(
       order.filter((x) => x === 'upload_start' || x === 'upload_done' || x === 'ingest' || x === 'complete_batch'),
       ['upload_start', 'upload_done', 'ingest', 'complete_batch']
+    );
+    assert.equal(ingestedReport.durationMs, result.duration);
+
+    const fallbackExecution = { ...execution, startedAt: Date.now() - 123 };
+    const fallbackReport = reporter.buildReport(
+      test,
+      { ...result, duration: undefined },
+      fallbackExecution
+    );
+    assert.equal(
+      fallbackReport.durationMs,
+      fallbackReport.completedAtMillis - fallbackReport.startedAtMillis
     );
   });
 });

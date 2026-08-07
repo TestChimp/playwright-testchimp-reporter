@@ -161,6 +161,13 @@ export class TestChimpApiClient {
       if (error instanceof AxiosError) {
         const status = error.response?.status;
         const message = error.response?.data?.message || error.message;
+        if (status === 401 || status === 403) {
+          // Capability-denied or auth issues on append-only API op ingest must never fail the test run.
+          console.warn(
+            `[TestChimp] ingest_api_operation_interactions skipped (${status}): ${message}. Tests continue.`
+          );
+          return;
+        }
         console.error(`[TestChimp] ingest_api_operation_interactions error (${status}): ${message}`);
       } else {
         console.error('[TestChimp] ingest_api_operation_interactions failed:', error);

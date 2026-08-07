@@ -514,6 +514,66 @@ export function getEnvVar(name: string, defaultValue?: string): string | undefin
   return process.env[name] || defaultValue;
 }
 
+/** Default SaaS CI ingest / RUM host (prod). */
+export const DEFAULT_INGRESS_URL = 'https://ingress.testchimp.io';
+
+/** Default SaaS control-plane host (CLI / MCP / ai-wright). */
+export const DEFAULT_FEATURESERVICE_URL = 'https://featureservice.testchimp.io';
+
+const SAAS_FEATURESERVICE_TO_INGRESS: Record<string, string> = {
+  'https://featureservice.testchimp.io': 'https://ingress.testchimp.io',
+  'https://featureservice-staging.testchimp.io': 'https://ingress-staging.testchimp.io',
+};
+
+function stripTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, '');
+}
+
+/**
+ * Map known SaaS featureservice hosts to the matching ingress host.
+ * Custom / enterprise URLs are returned unchanged.
+ */
+export function mapSaaSFeatureserviceToIngress(url: string): string {
+  const normalized = stripTrailingSlashes(String(url || '').trim());
+  if (!normalized) return normalized;
+  return SAAS_FEATURESERVICE_TO_INGRESS[normalized] || normalized;
+}
+
+export interface ResolveCiIngestBaseUrlOptions {
+  /** Override TESTCHIMP_INGRESS_URL */
+  ingressUrl?: string;
+  /** Override TESTCHIMP_BACKEND_URL (SaaS featureservice hosts are rewritten to ingress) */
+  backendUrl?: string;
+}
+
+/**
+ * Resolve the base URL for CI ingest (execution reports, attachments, ExploreChimp uploads).
+ *
+ * Priority:
+ * 1. TESTCHIMP_INGRESS_URL / options.ingressUrl
+ * 2. TESTCHIMP_BACKEND_URL / options.backendUrl, with SaaS featureservice* → ingress* rewrite
+ * 3. DEFAULT_INGRESS_URL
+ *
+ * Leave TESTCHIMP_BACKEND_URL as featureservice for CLI / MCP / ai-wright; this helper is ingest-only.
+ */
+export function resolveCiIngestBaseUrl(options?: ResolveCiIngestBaseUrlOptions): string {
+  const ingressExplicit = String(
+    process.env.TESTCHIMP_INGRESS_URL?.trim() || options?.ingressUrl || ''
+  ).trim();
+  if (ingressExplicit) {
+    return stripTrailingSlashes(ingressExplicit);
+  }
+
+  const backend = String(
+    process.env.TESTCHIMP_BACKEND_URL?.trim() || options?.backendUrl || ''
+  ).trim();
+  if (backend) {
+    return mapSaaSFeatureserviceToIngress(backend);
+  }
+
+  return DEFAULT_INGRESS_URL;
+}
+
 /**
  * Generate a UUID v4
  * Simple implementation without external dependency

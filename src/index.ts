@@ -21,7 +21,8 @@
  * Environment Variables:
  * - TESTCHIMP_API_KEY (required for backend calls): resolves project + organization server-side
  * - TESTCHIMP_PROJECT_ID (optional): only when not inferable from API key (legacy paths)
- * - TESTCHIMP_BACKEND_URL (optional): Featureservice base URL (defaults used by reporter)
+ * - TESTCHIMP_INGRESS_URL (optional): CI ingest host (default https://ingress.testchimp.io)
+ * - TESTCHIMP_BACKEND_URL (optional): Control-plane host for ai-wright; SaaS featureservice* is rewritten to ingress* for CI ingest when INGRESS_URL is unset
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)

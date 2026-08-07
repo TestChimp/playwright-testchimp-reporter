@@ -151,7 +151,8 @@ You can pass options in `playwright.config.ts`:
 ```ts
 ['@testchimp/playwright/reporter', {
   apiKey: '...',           // override env (not recommended in CI)
-  backendUrl: '...',       // override TESTCHIMP_BACKEND_URL
+  ingressUrl: '...',       // override TESTCHIMP_INGRESS_URL (CI ingest host)
+  backendUrl: '...',       // override TESTCHIMP_BACKEND_URL (control plane / ai-wright)
   projectId: '...',       // optional override env
   testsFolder: 'tests',   // base dir for relative path calculation
   release: '1.0.0',
@@ -163,6 +164,8 @@ You can pass options in `playwright.config.ts`:
 ```
 
 Environment variables take precedence over these options.
+
+**CI ingest host:** default `https://ingress.testchimp.io`. Set `TESTCHIMP_INGRESS_URL` (or `ingressUrl`) to override. If only `TESTCHIMP_BACKEND_URL` is set to a SaaS `featureservice*.testchimp.io` host, the reporter rewrites it to the matching `ingress*` host for ingest. Keep `TESTCHIMP_BACKEND_URL` as featureservice for CLI / MCP / ai-wright.
 
 ---
 

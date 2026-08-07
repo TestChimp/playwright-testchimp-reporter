@@ -30,9 +30,11 @@ import {
   generateUUID,
   getBranchName,
   getRunCommitSha,
+  DEFAULT_FEATURESERVICE_URL,
   getEnvVar,
   getTestChimpBatchInvocationFilePath,
   normalizeManifestFolderPath,
+  resolveCiIngestBaseUrl,
   resolveManifestEntryFromRuntime,
   stableExploreChimpAnalyticsStepId,
   stableJourneyExecutionId,
@@ -156,6 +158,7 @@ export class TestChimpReporter implements Reporter {
     this.options = {
       apiKey: options.apiKey || '',
       backendUrl: options.backendUrl || '',
+      ingressUrl: options.ingressUrl || '',
       platformBackendUrl: options.platformBackendUrl || '',
       batchInvocationId: options.batchInvocationId || '',
       projectId: options.projectId || '',
@@ -178,13 +181,19 @@ export class TestChimpReporter implements Reporter {
     const apiKey = getEnvVar('TESTCHIMP_API_KEY', this.options.apiKey);
     const projectId = getEnvVar('TESTCHIMP_PROJECT_ID', this.options.projectId);
     this.testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER', this.options.testsFolder) || 'tests';
-    // In platform/repair mode reporter calls scriptservice (step_end/test_end or repair_* endpoints)
-    // via TESTCHIMP_PLATFORM_BACKEND_URL; TESTCHIMP_BACKEND_URL stays as featureservice for ai-wright etc.
-    const backendUrlRaw =
+    // Platform/repair: scriptservice via TESTCHIMP_PLATFORM_BACKEND_URL (TESTCHIMP_BACKEND_URL = featureservice for ai-wright).
+    // CI: ingest host via TESTCHIMP_INGRESS_URL, or SaaS featureservice→ingress rewrite, else ingress default.
+    const backendUrl =
       this.options.executionMode === 'platform' || this.options.executionMode === 'repair'
-        ? getEnvVar('TESTCHIMP_PLATFORM_BACKEND_URL', this.options.platformBackendUrl) || getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io'
-        : getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) || 'https://featureservice.testchimp.io';
-    const backendUrl = String(backendUrlRaw || '').trim() || 'https://featureservice.testchimp.io';
+        ? String(
+            getEnvVar('TESTCHIMP_PLATFORM_BACKEND_URL', this.options.platformBackendUrl) ||
+              getEnvVar('TESTCHIMP_BACKEND_URL', this.options.backendUrl) ||
+              DEFAULT_FEATURESERVICE_URL
+          ).trim() || DEFAULT_FEATURESERVICE_URL
+        : resolveCiIngestBaseUrl({
+            ingressUrl: this.options.ingressUrl,
+            backendUrl: this.options.backendUrl,
+          });
 
     // Update options with env var values for release/environment
     this.options.release = getEnvVar('TESTCHIMP_RELEASE', this.options.release) || '';
@@ -202,10 +211,12 @@ export class TestChimpReporter implements Reporter {
     this.isEnabled = true;
 
     const envTcBackend = process.env.TESTCHIMP_BACKEND_URL;
+    const envTcIngress = process.env.TESTCHIMP_INGRESS_URL;
     const envEc = process.env.EXPLORECHIMP_ENABLED;
     console.log(
       `[TestChimp] ingest_diag onBegin pid=${process.pid} executionMode=${this.options.executionMode} ` +
         `env_TESTCHIMP_BACKEND_URL=${envTcBackend === undefined ? '(undefined)' : JSON.stringify(envTcBackend)} ` +
+        `env_TESTCHIMP_INGRESS_URL=${envTcIngress === undefined ? '(undefined)' : JSON.stringify(envTcIngress)} ` +
         `resolvedReporterBackendUrl=${JSON.stringify(backendUrl)} ` +
         `axiosBaseURL=${JSON.stringify(this.apiClient.getBaseUrl())} ` +
         `EXPLORECHIMP_ENABLED=${envEc === undefined ? '(undefined)' : JSON.stringify(envEc)} ` +

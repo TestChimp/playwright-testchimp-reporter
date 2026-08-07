@@ -2,7 +2,8 @@
  * ExploreChimp local runs (when `EXPLORECHIMP_ENABLED`): page instrumentation + analyze API via Featureservice.
  * Wired automatically by `installTrueCoverage` / `installTestChimp` — do not import this module from app code.
  * With ExploreChimp on, call markers via the Playwright fixture: `test('…', async ({ markScreenState }) => { … })`.
- * Env: TESTCHIMP_BACKEND_URL, TESTCHIMP_API_KEY, TESTCHIMP_BATCH_INVOCATION_ID (exploration id).
+ * Env: TESTCHIMP_INGRESS_URL (preferred for uploads/analyze), else TESTCHIMP_BACKEND_URL with SaaS
+ * featureservice→ingress rewrite; TESTCHIMP_API_KEY; TESTCHIMP_BATCH_INVOCATION_ID (exploration id).
  * Branch for analyze payloads: every `POST .../analyze_explorechimp_data_sources` body includes `branchName`
  * from {@link getBranchName} — set **`TESTCHIMP_BRANCH_NAME`** (preferred) or **`TESTCHIMP_BRANCH`** locally so
  * the server can resolve `branch_id` on explorations and bugs (CI git envs are used when unset).
@@ -23,6 +24,7 @@ import {
   readTestChimpBatchInvocationId,
   derivePathsFromTestInfo,
   deriveTestsFolder,
+  resolveCiIngestBaseUrl,
   resolveManifestEntryFromRuntime,
   loadJobManifestEntries,
   stableExploreChimpAnalyticsStepId,
@@ -203,11 +205,10 @@ function pageUrlPayload(parts: PageUrlParts): Pick<AnalyzeDataSourcesRequest, 'p
 }
 
 function createBackendClient(): AxiosInstance {
-  const backendUrl =
-    process.env.TESTCHIMP_BACKEND_URL?.trim() || 'https://featureservice.testchimp.io';
+  const backendUrl = resolveCiIngestBaseUrl();
   const apiKey = process.env.TESTCHIMP_API_KEY?.trim() || '';
   return axios.create({
-    baseURL: backendUrl.replace(/\/+$/, ''),
+    baseURL: backendUrl,
     headers: {
       'Content-Type': 'application/json',
       'testchimp-api-key': apiKey,

@@ -153,7 +153,15 @@ export interface JobManifestEntry {
 export interface TestChimpReporterOptions {
   /** Override TESTCHIMP_API_KEY env var */
   apiKey?: string;
-  /** Override TESTCHIMP_BACKEND_URL env var (default: https://featureservice.testchimp.io) - used for ingest in CI; also for ai-wright etc. */
+  /**
+   * Override TESTCHIMP_INGRESS_URL — CI ingest host (execution reports, attachments, ExploreChimp uploads).
+   * Default: https://ingress.testchimp.io. When unset, SaaS featureservice* backend URLs are rewritten to ingress*.
+   */
+  ingressUrl?: string;
+  /**
+   * Override TESTCHIMP_BACKEND_URL — control-plane host for ai-wright / CLI.
+   * In CI mode, when TESTCHIMP_INGRESS_URL is unset, SaaS featureservice* values are rewritten to the matching ingress* for ingest.
+   */
   backendUrl?: string;
   /** Override TESTCHIMP_PLATFORM_BACKEND_URL env var - in platform mode, reporter uses this for step_end/test_end (scriptservice); if unset, falls back to backendUrl */
   platformBackendUrl?: string;
@@ -173,6 +181,6 @@ export interface TestChimpReporterOptions {
   captureScreenshots?: boolean;
   /** Enable verbose logging (default: false) */
   verbose?: boolean;
-  /** Execution mode: 'ci' = report to featureservice ingest on test end; 'platform' = report step_end/test_end to scriptservice; 'repair' = report repair_step_end/repair_test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
+  /** Execution mode: 'ci' = report to ingress ingest on test end; 'platform' = report step_end/test_end to scriptservice; 'repair' = report repair_step_end/repair_test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
   executionMode?: 'ci' | 'platform' | 'repair';
 }

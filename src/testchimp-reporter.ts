@@ -24,6 +24,7 @@ import {
   BatchInvocationStatus,
 } from './types';
 import { buildExecutionDeviceContext } from './execution-context';
+import { collectPlaywrightAnnotations } from './annotations';
 import {
   derivePaths,
   generateStepId,
@@ -365,7 +366,8 @@ export class TestChimpReporter implements Reporter {
     return {
       ...jobDetail,
       steps: [...currentSteps],
-      pwError: this.toPlaywrightError(result.error)
+      pwError: this.toPlaywrightError(result.error),
+      annotations: collectPlaywrightAnnotations(test, result),
     };
   }
 
@@ -1077,6 +1079,7 @@ export class TestChimpReporter implements Reporter {
 
     const executionContext = buildExecutionDeviceContext(test);
     const completedAtMillis = Date.now();
+    const annotations = collectPlaywrightAnnotations(test, result);
     const report: SmartTestExecutionReport = {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
@@ -1094,6 +1097,7 @@ export class TestChimpReporter implements Reporter {
         scenarioCoverageResults: [], // Backend will populate if empty
         executionContext,
         gitCommitSha,
+        annotations,
       },
       startedAtMillis: execution.startedAt,
       completedAtMillis,
@@ -1102,6 +1106,7 @@ export class TestChimpReporter implements Reporter {
       branchId: branchIdValid,
       gitCommitSha,
       executionContext,
+      annotations,
     };
     const exploreChimpJobId = this.exploreChimpJourneyExecutionJobId(test, result, paths);
     if (exploreChimpJobId) {

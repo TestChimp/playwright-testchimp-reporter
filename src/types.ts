@@ -73,6 +73,12 @@ export interface ScenarioCoverageResult {
   status: ScenarioCoverageStatus;
 }
 
+/** Playwright TestCase / TestResult annotation forwarded on execution reports. */
+export interface TestAnnotation {
+  type?: string;
+  description?: string;
+}
+
 /** Single retry attempt log (steps + status + error for one attempt) */
 export interface RetryAttemptLog {
   retryCount?: number;
@@ -102,6 +108,8 @@ export interface SmartTestExecutionJobDetail {
   pwError?: PlaywrightError;
   traceGcsPath?: string;
   gitCommitSha?: string;
+  /** Playwright annotations (type + description), including scenario links. */
+  annotations?: TestAnnotation[];
 }
 
 export interface SmartTestExecutionReport {
@@ -123,6 +131,8 @@ export interface SmartTestExecutionReport {
   executionContext?: ExecutionDeviceContext;
   /** Playwright TestResult.duration in milliseconds. */
   durationMs?: number;
+  /** Playwright TestCase/TestResult annotations forwarded to ingest. */
+  annotations?: TestAnnotation[];
 }
 
 export interface IngestSmartTestExecutionReportRequest {

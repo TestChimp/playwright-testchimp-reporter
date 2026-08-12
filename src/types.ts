@@ -110,6 +110,8 @@ export interface SmartTestExecutionJobDetail {
   gitCommitSha?: string;
   /** Playwright annotations (type + description), including scenario links. */
   annotations?: TestAnnotation[];
+  /** Why skipped (e.g. "smart-smoke" or Playwright skip message). */
+  skipReason?: string;
 }
 
 export interface SmartTestExecutionReport {

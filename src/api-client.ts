@@ -73,7 +73,7 @@ export class TestChimpApiClient {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'testchimp-api-key': apiKey
+      'testchimp-api-key': apiKey,
     };
     const trimmedProject = projectId?.trim();
     if (trimmedProject) {
@@ -140,6 +140,31 @@ export class TestChimpApiClient {
 
       throw error;
     }
+  }
+
+  /**
+   * Select smart-smoke subset (CI: same ingress base; ingress facades to featureservice).
+   */
+  async selectSmartSmokeTests(body: {
+    related_tests: Array<Record<string, unknown>>;
+    include_tags?: string[];
+    tagged_tests?: Array<Record<string, unknown>>;
+    suite_candidates?: Array<Record<string, unknown>>;
+    max_time_budget_mins?: number;
+    max_tests?: number;
+    suite_percentage?: number;
+    branch_name?: string;
+    environment?: string;
+  }): Promise<{ selectedTests: Array<Record<string, unknown>> }> {
+    const response = await this.client.post('/api/mcp/select_smart_smoke_tests', body, {
+      timeout: this.longRequestTimeoutMs,
+    });
+    const data = toCamelCase(response.data) as {
+      selectedTests?: Array<Record<string, unknown>>;
+      selected_tests?: Array<Record<string, unknown>>;
+    };
+    const selected = data.selectedTests ?? data.selected_tests ?? [];
+    return { selectedTests: Array.isArray(selected) ? selected : [] };
   }
 
   /**

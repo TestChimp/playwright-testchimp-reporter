@@ -48,6 +48,21 @@ import {
   parseApiCoverageAttachment,
   type ApiOperationInteraction,
 } from './api-coverage/capture';
+import {
+  collectSuiteCandidates,
+  findPlansRoot,
+  fromWireLocator,
+  getSmartSmokeSelectionFilePath,
+  loadRelatedTests,
+  readSmartSmokeUseFromConfig,
+  resolveSkipReasonFromAnnotations,
+  resolveSmartSmokeConfig,
+  toWireLocator,
+  unionLocators,
+  unlinkSmartSmokeSelectionFile,
+  writeSmartSmokeSelectionFile,
+  type TestLocatorJson,
+} from './smart-smoke';
 import path from 'path';
 
 /**
@@ -116,6 +131,8 @@ export class TestChimpReporter implements Reporter {
   /** Path we wrote for this run; unlinked in onEnd when write succeeded. */
   private batchInvocationFileWrittenPath: string | null = null;
   private shouldUnlinkBatchInvocationFile: boolean = false;
+  /** Smart-smoke selection sidecar written in onBegin; unlinked in onEnd. */
+  private smartSmokeSelectionFilePath: string | null = null;
   private testsFolder: string = '';
 
   // Track test executions (keyed by test ID + attempt, e.g. "testId_attempt_0", "testId_attempt_1").
@@ -173,7 +190,7 @@ export class TestChimpReporter implements Reporter {
     };
   }
 
-  onBegin(config: FullConfig, suite: Suite): void {
+  async onBegin(config: FullConfig, suite: Suite): Promise<void> {
     this.config = config;
     this.batchInvocationId = getEnvVar('TESTCHIMP_BATCH_INVOCATION_ID', this.options.batchInvocationId) || generateUUID();
     this.writeSuiteBatchInvocationFileForExploreChimp();
@@ -205,6 +222,7 @@ export class TestChimpReporter implements Reporter {
     if (!apiKey && this.options.executionMode !== 'repair') {
       console.warn('[TestChimp] Missing TESTCHIMP_API_KEY. Reporting disabled.');
       this.isEnabled = false;
+      await this.maybeRunSmartSmokeSelection(suite, null);
       return;
     }
 
@@ -254,6 +272,8 @@ export class TestChimpReporter implements Reporter {
 
     // Scan suite to understand retry configuration
     this.scanTestRetries(suite);
+
+    await this.maybeRunSmartSmokeSelection(suite, this.apiClient);
   }
 
   private loadJobManifest(): JobManifestEntry[] {
@@ -363,11 +383,17 @@ export class TestChimpReporter implements Reporter {
   ): SmartTestExecutionJobDetail {
     const status = this.mapStatus(result.status);
     const jobDetail = this.buildJobDetailFromAttempts(test.id, testName, result.retry, true, status, result.error?.message);
+    const annotations = collectPlaywrightAnnotations(test, result);
+    const skipReason =
+      status === SmartTestExecutionStatus.SMART_TEST_EXECUTION_SKIPPED
+        ? resolveSkipReasonFromAnnotations(annotations, result.error?.message)
+        : undefined;
     return {
       ...jobDetail,
       steps: [...currentSteps],
       pwError: this.toPlaywrightError(result.error),
-      annotations: collectPlaywrightAnnotations(test, result),
+      annotations,
+      skipReason,
     };
   }
 
@@ -816,6 +842,8 @@ export class TestChimpReporter implements Reporter {
       }
     } finally {
       this.unlinkSuiteBatchInvocationFileIfWritten();
+      unlinkSmartSmokeSelectionFile(this.smartSmokeSelectionFilePath);
+      this.smartSmokeSelectionFilePath = null;
     }
   }
 
@@ -837,6 +865,128 @@ export class TestChimpReporter implements Reporter {
       this.batchInvocationFileWrittenPath = null;
       this.shouldUnlinkBatchInvocationFile = false;
     }
+  }
+
+  /**
+   * When TESTCHIMP_SMART_SMOKE_ENABLED, select a subset and write a sidecar for workers.
+   * When disabled, remove any leftover sidecar so a prior crashed run cannot skip the suite.
+   */
+  private async maybeRunSmartSmokeSelection(
+    suite: Suite,
+    apiClient: TestChimpApiClient | null
+  ): Promise<void> {
+    const rootDir = this.config?.rootDir || process.cwd();
+    const useOpts = readSmartSmokeUseFromConfig(this.config);
+    const smoke = resolveSmartSmokeConfig(useOpts);
+    if (!smoke.enabled) {
+      unlinkSmartSmokeSelectionFile(getSmartSmokeSelectionFilePath(rootDir));
+      return;
+    }
+    if (smoke.usedDefaultSuitePercentage) {
+      console.warn(
+        '[TestChimp] Smart-smoke: no size constraint from env or use.testchimpSmartSmoke — defaulting to suitePercentage=20'
+      );
+    }
+
+    const branchName = getBranchName();
+    const plansRoot = findPlansRoot(rootDir);
+    if (!plansRoot) {
+      console.warn(
+        `[TestChimp] Smart-smoke: could not find plans root (.testchimp-plans or plans/) under ${rootDir}; related-tests.json will be empty`
+      );
+    } else if (!branchName) {
+      console.warn(
+        '[TestChimp] Smart-smoke: branch name unresolved (set TESTCHIMP_BRANCH_NAME); related-tests.json will be empty'
+      );
+    }
+    const relatedTests = loadRelatedTests(plansRoot, branchName);
+    const { suiteCandidates, taggedTests } = collectSuiteCandidates(
+      suite,
+      this.testsFolder,
+      rootDir,
+      smoke.includeTags
+    );
+    const mustInclude = unionLocators(relatedTests, taggedTests);
+
+    let selected: TestLocatorJson[];
+    if (smoke.relatedTestsOnly) {
+      selected = unionLocators(relatedTests);
+      console.log(
+        `[TestChimp] Smart-smoke related-tests-only: ${selected.length} test(s) from related-tests.json (branch=${branchName || '(unknown)'})`
+      );
+    } else if (apiClient) {
+      try {
+        // Phase-1 server only uses suite_candidates when must_include is empty — omit otherwise
+        // to avoid large POST bodies on big suites.
+        const resp = await apiClient.selectSmartSmokeTests({
+          related_tests: relatedTests.map(toWireLocator),
+          include_tags: smoke.includeTags,
+          tagged_tests: taggedTests.map(toWireLocator),
+          suite_candidates:
+            mustInclude.length === 0 ? suiteCandidates.map(toWireLocator) : [],
+          max_time_budget_mins: smoke.maxTimeBudgetMins,
+          max_tests: smoke.maxTests,
+          suite_percentage: smoke.suitePercentage,
+          branch_name: branchName,
+          environment: this.options.environment || undefined,
+        });
+        selected = (resp.selectedTests || []).map((r) => fromWireLocator(r));
+        console.log(
+          `[TestChimp] Smart-smoke selection API returned ${selected.length} test(s) (candidates=${suiteCandidates.length}, related=${relatedTests.length}, tagged=${taggedTests.length})`
+        );
+      } catch (e) {
+        selected = mustInclude;
+        console.warn(
+          `[TestChimp] Smart-smoke selection API failed; falling back to related∪tagged (${selected.length}):`,
+          e
+        );
+        if (selected.length === 0 && suiteCandidates.length > 0) {
+          selected = this.naiveLocalSuiteSlice(suiteCandidates, smoke);
+          console.warn(`[TestChimp] Smart-smoke local naive slice: ${selected.length} of ${suiteCandidates.length}`);
+        }
+      }
+    } else {
+      selected = mustInclude;
+      if (selected.length === 0 && suiteCandidates.length > 0) {
+        selected = this.naiveLocalSuiteSlice(suiteCandidates, smoke);
+      }
+      console.warn(
+        `[TestChimp] Smart-smoke: no API client; local selection ${selected.length} test(s)`
+      );
+    }
+
+    if (selected.length === 0) {
+      console.warn(
+        '[TestChimp] Smart-smoke: selection is empty — all tests will be skipped. Check related-tests.json / tags / budget.'
+      );
+    }
+
+    try {
+      this.smartSmokeSelectionFilePath = writeSmartSmokeSelectionFile(rootDir, {
+        enabled: true,
+        selectedTests: selected,
+        relatedTestsOnly: smoke.relatedTestsOnly,
+        branchName,
+      });
+      console.log(
+        `[TestChimp] Smart-smoke selection written: ${this.smartSmokeSelectionFilePath} (${selected.length} test(s))`
+      );
+    } catch (e) {
+      console.error('[TestChimp] Smart-smoke: failed to write selection file:', e);
+      this.smartSmokeSelectionFilePath = null;
+    }
+  }
+
+  private naiveLocalSuiteSlice(
+    suiteCandidates: TestLocatorJson[],
+    smoke: { suitePercentage?: number; maxTests?: number }
+  ): TestLocatorJson[] {
+    const pct = smoke.suitePercentage ?? 20;
+    let n = Math.max(1, Math.ceil(suiteCandidates.length * (pct / 100)));
+    if (smoke.maxTests != null && smoke.maxTests > 0) {
+      n = Math.min(n, smoke.maxTests);
+    }
+    return suiteCandidates.slice(0, n);
   }
 
   private unlinkSuiteBatchInvocationFileIfWritten(): void {
@@ -1080,6 +1230,10 @@ export class TestChimpReporter implements Reporter {
     const executionContext = buildExecutionDeviceContext(test);
     const completedAtMillis = Date.now();
     const annotations = collectPlaywrightAnnotations(test, result);
+    const skipReason =
+      status === SmartTestExecutionStatus.SMART_TEST_EXECUTION_SKIPPED
+        ? resolveSkipReasonFromAnnotations(annotations, result.error?.message)
+        : undefined;
     const report: SmartTestExecutionReport = {
       folderPath: paths.folderPath,
       fileName: paths.fileName,
@@ -1098,6 +1252,7 @@ export class TestChimpReporter implements Reporter {
         executionContext,
         gitCommitSha,
         annotations,
+        skipReason,
       },
       startedAtMillis: execution.startedAt,
       completedAtMillis,

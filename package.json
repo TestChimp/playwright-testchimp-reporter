@@ -1,6 +1,6 @@
 {
   "name": "@testchimp/playwright",
-  "version": "0.2.19",
+  "version": "0.2.21",
   "description": "Playwright/Mobilewright reporter and runtime for TestChimp tracking and coverage reporting",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

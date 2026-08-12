@@ -29,6 +29,10 @@ import {
   drainApiCoverageInteractions,
   isApiCoverageEnabled,
 } from './api-coverage/capture';
+import {
+  maybeSkipForSmartSmoke,
+  type TestchimpSmartSmokeUseOptions,
+} from './smart-smoke';
 
 const pwRequire = createRequire(path.join(process.cwd(), 'package.json'));
 
@@ -38,6 +42,11 @@ export type MarkScreenStateFixture = (screenName: string, stateName?: string) =>
 export type InstallTestChimpOptions = {
   /** `screen` for `@mobilewright/test` barrels; `page` for `@playwright/test` (default). */
   uiFixture?: FixtureKey;
+  /**
+   * Defaults for `use.testchimpSmartSmoke` (also overridable from playwright.config `use`).
+   * Enable a run with `TESTCHIMP_SMART_SMOKE_ENABLED=true` (or `1`).
+   */
+  testchimpSmartSmoke?: TestchimpSmartSmokeUseOptions;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -178,7 +187,26 @@ export function installTrueCoverage(test: any, options: InstallTestChimpOptions 
   const uiFixture = options.uiFixture ?? 'page';
 
   // Web (@playwright/test): only extend `page` + optional ExploreChimp — never touch `device` / mobile hooks.
-  let chain = test;
+  let chain = test.extend({
+    // Project defaults / playwright.config `use.testchimpSmartSmoke`
+    testchimpSmartSmoke: [options.testchimpSmartSmoke ?? {}, { option: true }],
+    // Auto fixture: skip tests not in the smart-smoke selection sidecar (when enabled).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    _testchimpSmartSmokeGate: [
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async ({}: any, use: any, testInfo: any) => {
+        try {
+          maybeSkipForSmartSmoke(testInfo);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // eslint-disable-next-line no-console
+          console.warn(`[TestChimp] Smart-smoke gate failed (non-fatal): ${msg}`);
+        }
+        await use();
+      },
+      { auto: true },
+    ],
+  });
   if (uiFixture === 'screen') {
     chain = extendMobileTestWithTrueCoverageDevice(chain);
   }

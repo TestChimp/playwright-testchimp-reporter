@@ -199,6 +199,14 @@ export function installTrueCoverage(test: any, options: InstallTestChimpOptions 
           maybeSkipForSmartSmoke(testInfo);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          // Playwright `testInfo.skip()` throws to abort the test — must rethrow.
+          // Swallowing it lets non-selected tests keep running (false full-suite smoke).
+          if (
+            /skipped/i.test(msg) ||
+            (err as { name?: string })?.name === 'SkipError'
+          ) {
+            throw err;
+          }
           // eslint-disable-next-line no-console
           console.warn(`[TestChimp] Smart-smoke gate failed (non-fatal): ${msg}`);
         }

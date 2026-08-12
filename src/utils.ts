@@ -193,8 +193,14 @@ export function derivePathsFromTestInfo(
       if (projectName && part === projectName) continue;
       if (part === baseFile) continue;
       // Filter out file-ish parts that Playwright sometimes includes.
+      // Do not drop describe titles that merely contain '/' (e.g. "MCP/CLI tools").
       if (/\.(spec|test)\.[jt]sx?$/.test(part)) continue;
-      if (part.includes("/") || part.includes("\\")) continue;
+      if (
+        (part.includes("/") || part.includes("\\")) &&
+        part.split(/[/\\]/).some((p) => /\.(spec|test)\.[jt]sx?$/.test(p))
+      ) {
+        continue;
+      }
       suitePath.push(part);
     }
   }

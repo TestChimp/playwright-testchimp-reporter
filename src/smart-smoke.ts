@@ -287,11 +287,44 @@ export function loadRelatedTests(plansRoot: string | undefined, branchName: stri
   }
 }
 
+/**
+ * Temp runtime sidecar path (reporter writes; workers read). Not agent-authored —
+ * agents write `plans/smart-smoke/<branch>/related-tests.json` instead.
+ */
 export function getSmartSmokeSelectionFilePath(projectRootDir: string = process.cwd()): string {
-  return (
-    getEnvVar('TESTCHIMP_SMART_SMOKE_SELECTION_FILE') ||
-    path.join(projectRootDir, SMART_SMOKE_SELECTION_FILENAME)
-  );
+  const envPath = getEnvVar('TESTCHIMP_SMART_SMOKE_SELECTION_FILE')?.trim();
+  if (envPath) return envPath;
+  return path.join(projectRootDir, SMART_SMOKE_SELECTION_FILENAME);
+}
+
+/**
+ * Resolve an existing selection sidecar. Reporter writes under Playwright config
+ * `rootDir`; workers may pass `project.rootDir` or fall back to `cwd` (e.g. `ui/`
+ * vs `ui/tests/`). Search both — never require agents to author this file.
+ */
+export function resolveSmartSmokeSelectionFilePath(
+  projectRootDir: string = process.cwd()
+): string | undefined {
+  const envPath = getEnvVar('TESTCHIMP_SMART_SMOKE_SELECTION_FILE')?.trim();
+  if (envPath && fs.existsSync(envPath)) return envPath;
+
+  const candidates = new Set<string>();
+  const add = (dir: string | undefined) => {
+    if (!dir?.trim()) return;
+    candidates.add(path.join(path.resolve(dir), SMART_SMOKE_SELECTION_FILENAME));
+  };
+  add(projectRootDir);
+  add(process.cwd());
+  // Common monorepo: config under tests/, command run from package root.
+  add(path.join(process.cwd(), 'tests'));
+  if (projectRootDir) {
+    add(path.dirname(path.resolve(projectRootDir)));
+  }
+
+  for (const filePath of candidates) {
+    if (fs.existsSync(filePath)) return filePath;
+  }
+  return undefined;
 }
 
 export function writeSmartSmokeSelectionFile(
@@ -330,7 +363,9 @@ export function loadSmartSmokeSelectionLookup(
   if (!isTruthyEnv(process.env.TESTCHIMP_SMART_SMOKE_ENABLED)) {
     return undefined;
   }
-  const filePath = getSmartSmokeSelectionFilePath(projectRootDir);
+  const filePath =
+    resolveSmartSmokeSelectionFilePath(projectRootDir) ||
+    getSmartSmokeSelectionFilePath(projectRootDir);
   try {
     const st = fs.statSync(filePath);
     if (
@@ -391,9 +426,25 @@ export function isLocatorSelected(
   selected: TestLocatorJson[],
   keySet?: Set<string>
 ): boolean {
-  const key = locatorKey(locatorFromDerived(paths));
-  if (keySet) return keySet.has(key);
-  return selected.some((s) => locatorKey(s) === key);
+  const primary = locatorFromDerived(paths);
+  const key = locatorKey(primary);
+  if (keySet?.has(key) || selected.some((s) => locatorKey(s) === key)) {
+    return true;
+  }
+  // Suite-path empty fallback (mirrors manifest resolution): related-tests.json or
+  // selection API may omit describe titles while runtime includes them, or vice versa.
+  const suiteEmpty = locatorKey({ ...primary, testSuite: [] });
+  if (keySet?.has(suiteEmpty) || selected.some((s) => locatorKey(s) === suiteEmpty)) {
+    return true;
+  }
+  return selected.some((s) => {
+    const n = normalizeLocator(s);
+    return (
+      locatorKey({ ...n, testSuite: [] }) === suiteEmpty &&
+      (n.fileName || '') === (primary.fileName || '') &&
+      (primary.testName || '') === (n.testName || '')
+    );
+  });
 }
 
 export function resolveSkipReasonFromAnnotations(

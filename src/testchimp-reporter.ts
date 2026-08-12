@@ -34,6 +34,7 @@ import {
   DEFAULT_FEATURESERVICE_URL,
   getEnvVar,
   getTestChimpBatchInvocationFilePath,
+  isPlaywrightFinalAttempt,
   normalizeManifestFolderPath,
   resolveCiIngestBaseUrl,
   resolveManifestEntryFromRuntime,
@@ -657,13 +658,16 @@ export class TestChimpReporter implements Reporter {
       return;
     }
 
-    // Check if this is the final attempt (for retry handling)
-    // If test passed, it's always the final attempt (no retries will occur)
-    // If test failed, check if we've reached max retries
+    // Check if this is the final attempt (for retry handling).
+    // Playwright does not retry skipped/interrupted — treat those as final or they never ingest
+    // (smart-smoke skips with retries>0 were dropped as "non_final_attempt").
     const retryKey = test.id;
     const retryInfo = this.testRetryInfo.get(retryKey);
-    const testPassed = result.status === 'passed';
-    const isFinalAttempt = testPassed || !retryInfo || result.retry >= retryInfo.maxRetries;
+    const isFinalAttempt = isPlaywrightFinalAttempt(
+      result.status,
+      result.retry,
+      retryInfo?.maxRetries
+    );
 
     console.log(`[TestChimp] Test status: ${result.status}, retry: ${result.retry}, maxRetries: ${retryInfo?.maxRetries ?? 'unknown'}, isFinalAttempt: ${isFinalAttempt}`);
 
@@ -916,14 +920,13 @@ export class TestChimpReporter implements Reporter {
       );
     } else if (apiClient) {
       try {
-        // Phase-1 server only uses suite_candidates when must_include is empty — omit otherwise
-        // to avoid large POST bodies on big suites.
+        // Packing universe is loaded from SmartTest inventory on the server — do not POST
+        // the full Playwright suite (large bodies; server is source of truth).
         const resp = await apiClient.selectSmartSmokeTests({
           related_tests: relatedTests.map(toWireLocator),
           include_tags: smoke.includeTags,
           tagged_tests: taggedTests.map(toWireLocator),
-          suite_candidates:
-            mustInclude.length === 0 ? suiteCandidates.map(toWireLocator) : [],
+          suite_candidates: [],
           max_time_budget_mins: smoke.maxTimeBudgetMins,
           max_tests: smoke.maxTests,
           suite_percentage: smoke.suitePercentage,
@@ -932,7 +935,7 @@ export class TestChimpReporter implements Reporter {
         });
         selected = (resp.selectedTests || []).map((r) => fromWireLocator(r));
         console.log(
-          `[TestChimp] Smart-smoke selection API returned ${selected.length} test(s) (candidates=${suiteCandidates.length}, related=${relatedTests.length}, tagged=${taggedTests.length})`
+          `[TestChimp] Smart-smoke selection API returned ${selected.length} test(s) (localSuite=${suiteCandidates.length}, related=${relatedTests.length}, tagged=${taggedTests.length})`
         );
       } catch (e) {
         selected = mustInclude;

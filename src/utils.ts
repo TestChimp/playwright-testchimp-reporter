@@ -581,6 +581,25 @@ export function resolveCiIngestBaseUrl(options?: ResolveCiIngestBaseUrlOptions):
 }
 
 /**
+ * Whether this Playwright attempt is the last one that will run for the test.
+ * Passed / skipped / interrupted are terminal (Playwright does not retry them).
+ * Failed / timedOut retry until `retry >= maxRetries`.
+ */
+export function isPlaywrightFinalAttempt(
+  status: string,
+  retry: number,
+  maxRetries: number | undefined | null
+): boolean {
+  if (status === 'passed' || status === 'skipped' || status === 'interrupted') {
+    return true;
+  }
+  if (maxRetries == null) {
+    return true;
+  }
+  return retry >= maxRetries;
+}
+
+/**
  * Generate a UUID v4
  * Simple implementation without external dependency
  */

@@ -17,6 +17,18 @@ import {
 
 export const SMART_SMOKE_SKIP_REASON = 'smart-smoke';
 export const SMART_SMOKE_SELECTION_FILENAME = '.testchimp-smart-smoke-selection.json';
+/** Max wait for reporter to write selection sidecar before fail-closed skip. */
+export const SMART_SMOKE_SELECTION_WAIT_MS = 90_000;
+const SMART_SMOKE_SELECTION_POLL_MS = 100;
+
+function selectionWaitBudgetMs(): number {
+  const raw = process.env.TESTCHIMP_SMART_SMOKE_SELECTION_WAIT_MS?.trim();
+  if (raw) {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return SMART_SMOKE_SELECTION_WAIT_MS;
+}
 
 /** Project `use.testchimpSmartSmoke` shape (also fixture option). */
 export interface TestchimpSmartSmokeUseOptions {
@@ -90,20 +102,34 @@ export function resolveSmartSmokeConfig(
     maxTests = use.maxTests;
   }
 
+  let suitePercentageFromEnv = false;
   let suitePercentage: number | undefined;
   if (suitePctEnv) {
     const n = Number(suitePctEnv);
-    if (Number.isFinite(n) && n > 0) suitePercentage = n;
+    if (Number.isFinite(n) && n > 0) {
+      suitePercentage = n;
+      suitePercentageFromEnv = true;
+    }
   } else if (typeof use.suitePercentage === 'number' && use.suitePercentage > 0) {
     suitePercentage = use.suitePercentage;
   }
 
   let maxTimeBudgetMins: number | undefined;
+  let timeBudgetFromEnv = false;
   if (timeEnv) {
     const n = parseInt(timeEnv, 10);
-    if (Number.isFinite(n) && n > 0) maxTimeBudgetMins = n;
+    if (Number.isFinite(n) && n > 0) {
+      maxTimeBudgetMins = n;
+      timeBudgetFromEnv = true;
+    }
   } else if (typeof use.maxTimeBudgetMins === 'number' && use.maxTimeBudgetMins > 0) {
     maxTimeBudgetMins = use.maxTimeBudgetMins;
+  }
+
+  // Env time budget is the CI intent — do not AND with template use.suitePercentage.
+  // Treat empty/invalid MAX_TESTS env as unset so suppress still applies.
+  if (timeBudgetFromEnv && !suitePercentageFromEnv && maxTests == null) {
+    suitePercentage = undefined;
   }
 
   let includeTags: string[] = [];
@@ -346,22 +372,80 @@ type SelectionCacheEntry = {
 };
 
 let selectionCache: SelectionCacheEntry | null = null;
+/** After one failed wait, subsequent tests skip immediately (fail-closed). */
+let selectionWaitGaveUp = false;
 
 export function invalidateSmartSmokeSelectionCache(): void {
   selectionCache = null;
+  selectionWaitGaveUp = false;
 }
+
+type SelectionLookup =
+  | { selection: SmartSmokeSelectionFile; keySet: Set<string>; pending?: false }
+  | { pending: true };
 
 /**
  * Load selection sidecar once per worker (re-read only when mtime changes).
  * Returns undefined when smart-smoke is not active for this process.
+ * When enabled but the file is not ready yet, returns `{ pending: true }`.
  */
 export function loadSmartSmokeSelectionLookup(
   projectRootDir: string = process.cwd()
+): SelectionLookup | undefined {
+  return readSmartSmokeSelectionLookup(projectRootDir, /*respectGaveUp=*/ true);
+}
+
+function waitMs(ms: number): void {
+  // Prefer Atomics.wait (yields the thread). Avoid CPU-spinning busy loops.
+  try {
+    const sab = new SharedArrayBuffer(4);
+    const arr = new Int32Array(sab);
+    Atomics.wait(arr, 0, 0, ms);
+  } catch {
+    // Extremely old runtimes without SharedArrayBuffer — coarse sleep via child_process.
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require('child_process').execFileSync(process.execPath, ['-e', `setTimeout(()=>{},${ms})`], {
+        timeout: ms + 50,
+        stdio: 'ignore',
+      });
+    } catch {
+      // last resort: ignore (tight poll)
+    }
+  }
+}
+
+function waitForSmartSmokeSelection(
+  projectRootDir: string,
+  waitMsTotal: number = selectionWaitBudgetMs()
 ): { selection: SmartSmokeSelectionFile; keySet: Set<string> } | undefined {
+  if (selectionWaitGaveUp) {
+    return undefined;
+  }
+  const deadline = Date.now() + waitMsTotal;
+  while (Date.now() < deadline) {
+    const lookup = readSmartSmokeSelectionLookup(projectRootDir, /*respectGaveUp=*/ false);
+    if (!lookup) return undefined; // smart-smoke disabled mid-wait
+    if (!('pending' in lookup && lookup.pending)) {
+      return lookup as { selection: SmartSmokeSelectionFile; keySet: Set<string> };
+    }
+    waitMs(SMART_SMOKE_SELECTION_POLL_MS);
+  }
+  selectionWaitGaveUp = true;
+  return undefined;
+}
+
+function readSmartSmokeSelectionLookup(
+  projectRootDir: string,
+  respectGaveUp: boolean
+): SelectionLookup | undefined {
   // Env is the source of truth for "is this run smart-smoke" — ignore stale sidecars
   // left behind when a previous run crashed before onEnd unlink.
   if (!isTruthyEnv(process.env.TESTCHIMP_SMART_SMOKE_ENABLED)) {
     return undefined;
+  }
+  if (respectGaveUp && selectionWaitGaveUp) {
+    return { pending: true };
   }
   const filePath =
     resolveSmartSmokeSelectionFilePath(projectRootDir) ||
@@ -378,7 +462,7 @@ export function loadSmartSmokeSelectionLookup(
     const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as SmartSmokeSelectionFile;
     if (!parsed || !Array.isArray(parsed.selectedTests) || !parsed.enabled) {
       selectionCache = null;
-      return undefined;
+      return { pending: true };
     }
     const selection: SmartSmokeSelectionFile = {
       ...parsed,
@@ -386,17 +470,20 @@ export function loadSmartSmokeSelectionLookup(
     };
     const keySet = new Set(selection.selectedTests.map((t) => locatorKey(t)));
     selectionCache = { filePath, mtimeMs: st.mtimeMs, selection, keySet };
+    selectionWaitGaveUp = false;
     return { selection, keySet };
   } catch {
     selectionCache = null;
-    return undefined;
+    return { pending: true };
   }
 }
 
 export function readSmartSmokeSelectionFile(
   projectRootDir: string = process.cwd()
 ): SmartSmokeSelectionFile | undefined {
-  return loadSmartSmokeSelectionLookup(projectRootDir)?.selection;
+  const lookup = loadSmartSmokeSelectionLookup(projectRootDir);
+  if (!lookup || ('pending' in lookup && lookup.pending)) return undefined;
+  return lookup.selection;
 }
 
 export function unlinkSmartSmokeSelectionFile(filePath: string | null | undefined): void {
@@ -437,14 +524,60 @@ export function isLocatorSelected(
   if (keySet?.has(suiteEmpty) || selected.some((s) => locatorKey(s) === suiteEmpty)) {
     return true;
   }
+  // Leading "tests" platform-root mismatch (inventory historically included it).
+  const withTests = locatorKey({
+    ...primary,
+    folderPath: ['tests', ...(Array.isArray(primary.folderPath) ? primary.folderPath : [])],
+  });
+  if (keySet?.has(withTests) || selected.some((s) => locatorKey(s) === withTests)) {
+    return true;
+  }
   return selected.some((s) => {
     const n = normalizeLocator(s);
+    const nFolder = Array.isArray(n.folderPath) ? [...n.folderPath] : [];
+    if (nFolder.length > 0 && nFolder[0]?.toLowerCase() === 'tests') {
+      nFolder.shift();
+    }
+    const stripped = locatorKey({ ...n, folderPath: nFolder, testSuite: [] });
     return (
-      locatorKey({ ...n, testSuite: [] }) === suiteEmpty &&
+      (stripped === suiteEmpty || locatorKey({ ...n, testSuite: [] }) === suiteEmpty) &&
       (n.fileName || '') === (primary.fileName || '') &&
       (primary.testName || '') === (n.testName || '')
     );
   });
+}
+
+export function maybeSkipForSmartSmoke(testInfo: TestInfoLike & {
+  annotations: Array<{ type: string; description?: string }>;
+  skip: (condition?: boolean, description?: string) => void;
+  project?: { rootDir?: string };
+}): void {
+  if (!isTruthyEnv(process.env.TESTCHIMP_SMART_SMOKE_ENABLED)) {
+    return;
+  }
+  const rootDir = testInfo.project?.rootDir ?? process.cwd();
+  let lookup = loadSmartSmokeSelectionLookup(rootDir);
+  if (!lookup) return;
+  if ('pending' in lookup && lookup.pending) {
+    if (selectionWaitGaveUp) {
+      testInfo.annotations.push({ type: 'skip-reason', description: SMART_SMOKE_SKIP_REASON });
+      testInfo.skip(true, SMART_SMOKE_SKIP_REASON);
+      return;
+    }
+    lookup = waitForSmartSmokeSelection(rootDir);
+    if (!lookup) {
+      // Fail-closed: selection never arrived — skip rather than run the full suite.
+      testInfo.annotations.push({ type: 'skip-reason', description: SMART_SMOKE_SKIP_REASON });
+      testInfo.skip(true, SMART_SMOKE_SKIP_REASON);
+      return;
+    }
+  }
+  const ready = lookup as { selection: SmartSmokeSelectionFile; keySet: Set<string> };
+  const testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER') || 'tests';
+  const paths = derivePathsFromTestInfo(testInfo, testsFolder, rootDir);
+  if (isLocatorSelected(paths, ready.selection.selectedTests, ready.keySet)) return;
+  testInfo.annotations.push({ type: 'skip-reason', description: SMART_SMOKE_SKIP_REASON });
+  testInfo.skip(true, SMART_SMOKE_SKIP_REASON);
 }
 
 export function resolveSkipReasonFromAnnotations(
@@ -464,21 +597,6 @@ export function resolveSkipReasonFromAnnotations(
   }
   const msg = playwrightSkipMessage?.trim();
   return msg || undefined;
-}
-
-export function maybeSkipForSmartSmoke(testInfo: TestInfoLike & {
-  annotations: Array<{ type: string; description?: string }>;
-  skip: (condition?: boolean, description?: string) => void;
-  project?: { rootDir?: string };
-}): void {
-  const rootDir = testInfo.project?.rootDir ?? process.cwd();
-  const lookup = loadSmartSmokeSelectionLookup(rootDir);
-  if (!lookup) return;
-  const testsFolder = getEnvVar('TESTCHIMP_TESTS_FOLDER') || 'tests';
-  const paths = derivePathsFromTestInfo(testInfo, testsFolder, rootDir);
-  if (isLocatorSelected(paths, lookup.selection.selectedTests, lookup.keySet)) return;
-  testInfo.annotations.push({ type: 'skip-reason', description: SMART_SMOKE_SKIP_REASON });
-  testInfo.skip(true, SMART_SMOKE_SKIP_REASON);
 }
 
 export function toWireLocator(loc: TestLocatorJson): Record<string, unknown> {

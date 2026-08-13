@@ -45,6 +45,46 @@ describe('smart-smoke config', () => {
     assert.equal(fallback.usedDefaultSuitePercentage, true);
   });
 
+  it('env time budget suppresses use-only suitePercentage', () => {
+    const cfg = resolveSmartSmokeConfig(
+      { suitePercentage: 20, includeTags: ['smoke'] },
+      {
+        TESTCHIMP_SMART_SMOKE_ENABLED: '1',
+        TESTCHIMP_SMART_SMOKE_MAX_TIME_BUDGET_MINS: '15',
+      }
+    );
+    assert.equal(cfg.maxTimeBudgetMins, 15);
+    assert.equal(cfg.suitePercentage, undefined);
+    assert.equal(cfg.usedDefaultSuitePercentage, false);
+  });
+
+  it('env suite percentage still applies with time budget', () => {
+    const cfg = resolveSmartSmokeConfig(
+      { suitePercentage: 20 },
+      {
+        TESTCHIMP_SMART_SMOKE_ENABLED: '1',
+        TESTCHIMP_SMART_SMOKE_MAX_TIME_BUDGET_MINS: '15',
+        TESTCHIMP_SMART_SMOKE_SUITE_PERCENTAGE: '40',
+      }
+    );
+    assert.equal(cfg.suitePercentage, 40);
+    assert.equal(cfg.maxTimeBudgetMins, 15);
+  });
+
+  it('env time budget suppresses use-only suitePercentage even with empty MAX_TESTS env', () => {
+    const cfg = resolveSmartSmokeConfig(
+      { suitePercentage: 20 },
+      {
+        TESTCHIMP_SMART_SMOKE_ENABLED: '1',
+        TESTCHIMP_SMART_SMOKE_MAX_TIME_BUDGET_MINS: '15',
+        TESTCHIMP_SMART_SMOKE_MAX_TESTS: '',
+      }
+    );
+    assert.equal(cfg.maxTimeBudgetMins, 15);
+    assert.equal(cfg.suitePercentage, undefined);
+    assert.equal(cfg.maxTests, undefined);
+  });
+
   it('relatedTestsOnly from env true/1', () => {
     const a = resolveSmartSmokeConfig({ relatedTestsOnly: false }, {
       TESTCHIMP_SMART_SMOKE_ENABLED: 'true',
@@ -86,6 +126,7 @@ describe('smart-smoke stale sidecar guard', () => {
     writeSmartSmokeSelectionFile,
     loadSmartSmokeSelectionLookup,
     invalidateSmartSmokeSelectionCache,
+    maybeSkipForSmartSmoke,
   } = require('../dist/smart-smoke.js');
 
   it('ignores selection file when TESTCHIMP_SMART_SMOKE_ENABLED is off', () => {
@@ -106,6 +147,81 @@ describe('smart-smoke stale sidecar guard', () => {
       else process.env.TESTCHIMP_SMART_SMOKE_ENABLED = prev;
       if (prevFile === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE;
       else process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE = prevFile;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns pending when enabled and sidecar missing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-smoke-'));
+    const prev = process.env.TESTCHIMP_SMART_SMOKE_ENABLED;
+    const prevFile = process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE;
+    try {
+      process.env.TESTCHIMP_SMART_SMOKE_ENABLED = 'true';
+      process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE = path.join(dir, 'missing.json');
+      invalidateSmartSmokeSelectionCache();
+      const lookup = loadSmartSmokeSelectionLookup(dir);
+      assert.deepEqual(lookup, { pending: true });
+    } finally {
+      if (prev === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_ENABLED;
+      else process.env.TESTCHIMP_SMART_SMOKE_ENABLED = prev;
+      if (prevFile === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE;
+      else process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE = prevFile;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('after wait timeout, subsequent lookups skip immediately (gave-up cache)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-smoke-'));
+    const prev = process.env.TESTCHIMP_SMART_SMOKE_ENABLED;
+    const prevFile = process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE;
+    const prevWait = process.env.TESTCHIMP_SMART_SMOKE_SELECTION_WAIT_MS;
+    const skipThrow = () => {
+      const err = new Error('skipped');
+      err.name = 'SkipError';
+      throw err;
+    };
+    try {
+      process.env.TESTCHIMP_SMART_SMOKE_ENABLED = 'true';
+      process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE = path.join(dir, 'missing.json');
+      process.env.TESTCHIMP_SMART_SMOKE_SELECTION_WAIT_MS = '0';
+      invalidateSmartSmokeSelectionCache();
+
+      assert.throws(
+        () =>
+          maybeSkipForSmartSmoke({
+            annotations: [],
+            skip: skipThrow,
+            project: { rootDir: dir },
+            title: 't',
+            titlePath: () => ['t'],
+            file: 'a.spec.ts',
+          }),
+        /skipped/i
+      );
+
+      const t1 = Date.now();
+      assert.throws(
+        () =>
+          maybeSkipForSmartSmoke({
+            annotations: [],
+            skip: skipThrow,
+            project: { rootDir: dir },
+            title: 't2',
+            titlePath: () => ['t2'],
+            file: 'b.spec.ts',
+          }),
+        /skipped/i
+      );
+      // Gave-up cache: second call must not re-enter a long wait.
+      assert.ok(Date.now() - t1 < 500);
+    } finally {
+      if (prev === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_ENABLED;
+      else process.env.TESTCHIMP_SMART_SMOKE_ENABLED = prev;
+      if (prevFile === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE;
+      else process.env.TESTCHIMP_SMART_SMOKE_SELECTION_FILE = prevFile;
+      if (prevWait === undefined) delete process.env.TESTCHIMP_SMART_SMOKE_SELECTION_WAIT_MS;
+      else process.env.TESTCHIMP_SMART_SMOKE_SELECTION_WAIT_MS = prevWait;
+      invalidateSmartSmokeSelectionCache();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

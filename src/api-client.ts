@@ -149,22 +149,50 @@ export class TestChimpApiClient {
     related_tests: Array<Record<string, unknown>>;
     include_tags?: string[];
     tagged_tests?: Array<Record<string, unknown>>;
+    /** @deprecated Platform inventory is authoritative — omit this field. */
     suite_candidates?: Array<Record<string, unknown>>;
     max_time_budget_mins?: number;
     max_tests?: number;
     suite_percentage?: number;
     branch_name?: string;
     environment?: string;
-  }): Promise<{ selectedTests: Array<Record<string, unknown>> }> {
-    const response = await this.client.post('/api/mcp/select_smart_smoke_tests', body, {
+  }): Promise<{
+    selectedTests: Array<Record<string, unknown>>;
+    candidateUniverseSize?: number;
+    seedsCount?: number;
+    selectedCount?: number;
+    estimatedSelectedTimeSecs?: number;
+    stopReason?: string;
+  }> {
+    // Never send suite_candidates (including []) — platform loads de-duped inventory.
+    const { suite_candidates: _omit, ...payload } = body;
+    const response = await this.client.post('/api/mcp/select_smart_smoke_tests', payload, {
       timeout: this.longRequestTimeoutMs,
     });
     const data = toCamelCase(response.data) as {
       selectedTests?: Array<Record<string, unknown>>;
       selected_tests?: Array<Record<string, unknown>>;
+      candidateUniverseSize?: number;
+      candidate_universe_size?: number;
+      seedsCount?: number;
+      seeds_count?: number;
+      selectedCount?: number;
+      selected_count?: number;
+      estimatedSelectedTimeSecs?: number;
+      estimated_selected_time_secs?: number;
+      stopReason?: string;
+      stop_reason?: string;
     };
     const selected = data.selectedTests ?? data.selected_tests ?? [];
-    return { selectedTests: Array.isArray(selected) ? selected : [] };
+    return {
+      selectedTests: Array.isArray(selected) ? selected : [],
+      candidateUniverseSize: data.candidateUniverseSize ?? data.candidate_universe_size,
+      seedsCount: data.seedsCount ?? data.seeds_count,
+      selectedCount: data.selectedCount ?? data.selected_count,
+      estimatedSelectedTimeSecs:
+        data.estimatedSelectedTimeSecs ?? data.estimated_selected_time_secs,
+      stopReason: data.stopReason ?? data.stop_reason,
+    };
   }
 
   /**

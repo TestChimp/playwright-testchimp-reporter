@@ -920,13 +920,11 @@ export class TestChimpReporter implements Reporter {
       );
     } else if (apiClient) {
       try {
-        // Packing universe is loaded from SmartTest inventory on the server — do not POST
-        // the full Playwright suite (large bodies; server is source of truth).
         const resp = await apiClient.selectSmartSmokeTests({
           related_tests: relatedTests.map(toWireLocator),
           include_tags: smoke.includeTags,
           tagged_tests: taggedTests.map(toWireLocator),
-          suite_candidates: [],
+          // Platform inventory is the packing universe — do not send suite_candidates.
           max_time_budget_mins: smoke.maxTimeBudgetMins,
           max_tests: smoke.maxTests,
           suite_percentage: smoke.suitePercentage,
@@ -934,8 +932,21 @@ export class TestChimpReporter implements Reporter {
           environment: this.options.environment || undefined,
         });
         selected = (resp.selectedTests || []).map((r) => fromWireLocator(r));
+        const diag = [
+          `localSuite=${suiteCandidates.length}`,
+          `related=${relatedTests.length}`,
+          `tagged=${taggedTests.length}`,
+          resp.candidateUniverseSize != null ? `universe=${resp.candidateUniverseSize}` : null,
+          resp.seedsCount != null ? `seeds=${resp.seedsCount}` : null,
+          resp.stopReason ? `stop=${resp.stopReason}` : null,
+          resp.estimatedSelectedTimeSecs != null
+            ? `estSecs=${Math.round(resp.estimatedSelectedTimeSecs)}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(', ');
         console.log(
-          `[TestChimp] Smart-smoke selection API returned ${selected.length} test(s) (localSuite=${suiteCandidates.length}, related=${relatedTests.length}, tagged=${taggedTests.length})`
+          `[TestChimp] Smart-smoke selection API returned ${selected.length} test(s) (${diag})`
         );
       } catch (e) {
         selected = mustInclude;
@@ -976,14 +987,34 @@ export class TestChimpReporter implements Reporter {
       );
     } catch (e) {
       console.error('[TestChimp] Smart-smoke: failed to write selection file:', e);
-      this.smartSmokeSelectionFilePath = null;
+      // Still try to write an empty enabled sidecar so workers fail-closed quickly
+      // instead of polling for 90s each.
+      try {
+        this.smartSmokeSelectionFilePath = writeSmartSmokeSelectionFile(rootDir, {
+          enabled: true,
+          selectedTests: [],
+          relatedTestsOnly: smoke.relatedTestsOnly,
+          branchName,
+        });
+      } catch {
+        this.smartSmokeSelectionFilePath = null;
+      }
     }
   }
 
   private naiveLocalSuiteSlice(
     suiteCandidates: TestLocatorJson[],
-    smoke: { suitePercentage?: number; maxTests?: number }
+    smoke: { suitePercentage?: number; maxTests?: number; maxTimeBudgetMins?: number }
   ): TestLocatorJson[] {
+    // Time-only budget with no count cap: run the local suite (server inventory unavailable).
+    if (
+      smoke.maxTimeBudgetMins != null &&
+      smoke.maxTimeBudgetMins > 0 &&
+      smoke.suitePercentage == null &&
+      (smoke.maxTests == null || smoke.maxTests <= 0)
+    ) {
+      return suiteCandidates.slice();
+    }
     const pct = smoke.suitePercentage ?? 20;
     let n = Math.max(1, Math.ceil(suiteCandidates.length * (pct / 100)));
     if (smoke.maxTests != null && smoke.maxTests > 0) {

@@ -520,6 +520,46 @@ export function getEnvVar(name: string, defaultValue?: string): string | undefin
   return process.env[name] || defaultValue;
 }
 
+const KNOWN_EXECUTION_SOURCES = new Set(['CI', 'MANUAL', 'LOCAL_AGENT', 'CLOUD_AGENT']);
+
+function envSet(env: NodeJS.Dict<string> | NodeJS.ProcessEnv, key: string): boolean {
+  return String(env[key] || '').trim() !== '';
+}
+
+/**
+ * Remote coding-agent hosts — not local IDE.
+ * Do not include CURSOR_AGENT / CLAUDE_CODE / CODEX: those are set for local desktop/CLI agents.
+ * Do not include GITHUB_ACTIONS: true pipelines also set it (with CI=true); skill exports CLOUD_AGENT there.
+ */
+const CLOUD_AGENT_HOST_ENV_KEYS = [
+  'CURSOR_AGENT_WORKER_ID',
+  'COPILOT_USE_PLATFORM',
+  'COPILOT_WORKSPACE',
+];
+
+/** Local IDE / CLI coding agents. Wins over CI=true so a Cursor desktop session is never stamped CI. */
+const LOCAL_AGENT_HOST_ENV_KEYS = ['CURSOR_AGENT', 'CLAUDE_CODE', 'CODEX', 'OPENHANDS', 'COPILOT_AGENT'];
+
+/**
+ * Resolve reporter ingest source. Env TESTCHIMP_EXECUTION_SOURCE wins.
+ * If unset: remote cloud-agent host → CLOUD_AGENT; local agent host → LOCAL_AGENT;
+ * else CI=true/1 → CI; else LOCAL_AGENT.
+ */
+export function resolveExecutionSource(env: NodeJS.Dict<string> | NodeJS.ProcessEnv = process.env): string {
+  const raw = String(env.TESTCHIMP_EXECUTION_SOURCE || '').trim().toUpperCase();
+  if (KNOWN_EXECUTION_SOURCES.has(raw)) {
+    return raw;
+  }
+  if (CLOUD_AGENT_HOST_ENV_KEYS.some((key) => envSet(env, key))) {
+    return 'CLOUD_AGENT';
+  }
+  if (LOCAL_AGENT_HOST_ENV_KEYS.some((key) => envSet(env, key))) {
+    return 'LOCAL_AGENT';
+  }
+  const ci = env.CI === 'true' || env.CI === '1';
+  return ci ? 'CI' : 'LOCAL_AGENT';
+}
+
 /** Default SaaS CI ingest / RUM host (prod). */
 export const DEFAULT_INGRESS_URL = 'https://ingress.testchimp.io';
 

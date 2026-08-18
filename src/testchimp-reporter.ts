@@ -37,6 +37,7 @@ import {
   isPlaywrightFinalAttempt,
   normalizeManifestFolderPath,
   resolveCiIngestBaseUrl,
+  resolveExecutionSource,
   resolveManifestEntryFromRuntime,
   stableExploreChimpAnalyticsStepId,
   stableJourneyExecutionId,
@@ -166,8 +167,9 @@ export class TestChimpReporter implements Reporter {
 
   constructor(options: TestChimpReporterOptions = {}) {
     // Env wins over playwright.config reporter options so repair/platform runs can
-    // force mode (e.g. scriptservice sets TESTCHIMP_EXECUTION_MODE=repair; customer
+    // force ingest path (e.g. scriptservice sets TESTCHIMP_EXECUTION_MODE=repair; customer
     // configs often hard-code executionMode: 'ci', which would otherwise hit FeatureService).
+    // This is not UI run source — that is TESTCHIMP_EXECUTION_SOURCE / report.executionSource.
     const envMode = getEnvVar('TESTCHIMP_EXECUTION_MODE')?.trim();
     const executionMode: 'ci' | 'platform' | 'repair' =
       envMode === 'repair' || envMode === 'platform' || envMode === 'ci'
@@ -235,6 +237,7 @@ export class TestChimpReporter implements Reporter {
     const envEc = process.env.EXPLORECHIMP_ENABLED;
     console.log(
       `[TestChimp] ingest_diag onBegin pid=${process.pid} executionMode=${this.options.executionMode} ` +
+        `executionSource=${resolveExecutionSource()} ` +
         `env_TESTCHIMP_BACKEND_URL=${envTcBackend === undefined ? '(undefined)' : JSON.stringify(envTcBackend)} ` +
         `env_TESTCHIMP_INGRESS_URL=${envTcIngress === undefined ? '(undefined)' : JSON.stringify(envTcIngress)} ` +
         `resolvedReporterBackendUrl=${JSON.stringify(backendUrl)} ` +
@@ -728,7 +731,8 @@ export class TestChimpReporter implements Reporter {
 
     console.log(
       `[TestChimp] ingest_diag before_ingest pid=${process.pid} test=${JSON.stringify(test.title)} ` +
-        `executionMode=${this.options.executionMode} axiosBaseURL=${JSON.stringify(this.apiClient.getBaseUrl())} ` +
+        `executionMode=${this.options.executionMode} executionSource=${report.executionSource} ` +
+        `axiosBaseURL=${JSON.stringify(this.apiClient.getBaseUrl())} ` +
         `isExploreChimpEnabled=${isExploreChimpEnabled()} env_EXPLORECHIMP=${process.env.EXPLORECHIMP_ENABLED === undefined ? '(undefined)' : JSON.stringify(process.env.EXPLORECHIMP_ENABLED)}`
     );
 
@@ -781,6 +785,10 @@ export class TestChimpReporter implements Reporter {
             batchInvocationId: this.batchInvocationId,
             status: batchStatus,
           });
+          const batchViewUrl = completeResponse.batchViewUrl?.trim();
+          if (batchViewUrl) {
+            console.log(`[TestChimp] Batch invocation view: ${batchViewUrl}`);
+          }
           if (this.options.verbose) {
             console.log(
               `[TestChimp] complete_batch_invocation materialized=${completeResponse.materialized ?? false} status=${result.status}`
@@ -1296,6 +1304,7 @@ export class TestChimpReporter implements Reporter {
       gitCommitSha,
       executionContext,
       annotations,
+      executionSource: resolveExecutionSource(),
     };
     const exploreChimpJobId = this.exploreChimpJourneyExecutionJobId(test, result, paths);
     if (exploreChimpJobId) {

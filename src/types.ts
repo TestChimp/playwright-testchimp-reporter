@@ -21,6 +21,7 @@ export enum BatchInvocationStatus {
 
 export interface CompleteBatchInvocationResponse {
   materialized?: boolean;
+  batchViewUrl?: string;
 }
 
 export enum StepExecutionStatus {
@@ -135,6 +136,8 @@ export interface SmartTestExecutionReport {
   durationMs?: number;
   /** Playwright TestCase/TestResult annotations forwarded to ingest. */
   annotations?: TestAnnotation[];
+  /** CI / LOCAL_AGENT / CLOUD_AGENT / MANUAL — from TESTCHIMP_EXECUTION_SOURCE. */
+  executionSource?: string;
 }
 
 export interface IngestSmartTestExecutionReportRequest {
@@ -193,6 +196,11 @@ export interface TestChimpReporterOptions {
   captureScreenshots?: boolean;
   /** Enable verbose logging (default: false) */
   verbose?: boolean;
-  /** Execution mode: 'ci' = report to ingress ingest on test end; 'platform' = report step_end/test_end to scriptservice; 'repair' = report repair_step_end/repair_test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci') */
+  /**
+   * Ingest path (not UI run source): 'ci' = report to ingress ingest on test end;
+   * 'platform' = report step_end/test_end to scriptservice; 'repair' = report
+   * repair_step_end/repair_test_end to scriptservice (default: from TESTCHIMP_EXECUTION_MODE or 'ci').
+   * Run source is TESTCHIMP_EXECUTION_SOURCE → report.executionSource (CI / LOCAL_AGENT / CLOUD_AGENT / MANUAL).
+   */
   executionMode?: 'ci' | 'platform' | 'repair';
 }

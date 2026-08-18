@@ -26,6 +26,11 @@
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
+ * - TESTCHIMP_EXECUTION_SOURCE (optional): CI | LOCAL_AGENT | CLOUD_AGENT | MANUAL — stamped on ingest
+ *   (UI run source). Skill sets LOCAL_AGENT / CLOUD_AGENT; true pipelines set CI. If unset:
+ *   remote cloud-agent host → CLOUD_AGENT; local agent host (Cursor IDE CURSOR_AGENT, Claude Code) →
+ *   LOCAL_AGENT; else CI=true/1 → CI; else LOCAL_AGENT.
+ *   Distinct from TESTCHIMP_EXECUTION_MODE (ingest path: ci | platform | repair).
  * - TESTCHIMP_ENABLE_API_CAPTURE (optional): set to 1/true to opt in to API operation
  *   capture + payload ingest (default off — no page listeners / no ingest)
  * - TESTCHIMP_SMART_SMOKE_ENABLED (optional): set to true/1 to enable smart-smoke subset selection

@@ -15,6 +15,12 @@
 
 import axios, { AxiosInstance } from 'axios';
 import FormData from 'form-data';
+import http from 'http';
+import https from 'https';
+
+/** Dedicated pool so ExploreChimp uploads/analyze never share Node's globalAgent with CI ingest. */
+const EXPLORECHIMP_HTTP_AGENT = new http.Agent({ keepAlive: true, maxSockets: 16 });
+const EXPLORECHIMP_HTTPS_AGENT = new https.Agent({ keepAlive: true, maxSockets: 16 });
 import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import path from 'path';
@@ -210,21 +216,28 @@ function createBackendClient(): AxiosInstance {
   return axios.create({
     baseURL: backendUrl,
     headers: {
-      'Content-Type': 'application/json',
       'testchimp-api-key': apiKey,
     },
     timeout: 120000,
+    httpAgent: EXPLORECHIMP_HTTP_AGENT,
+    httpsAgent: EXPLORECHIMP_HTTPS_AGENT,
   });
 }
 
 async function uploadScreenshot(client: AxiosInstance, buffer: Buffer): Promise<string> {
   const form = new FormData();
   form.append('file', buffer, { filename: 'explorechimp.jpg', contentType: 'image/jpeg' });
+  const headers: Record<string, string | number> = { ...form.getHeaders() };
+  try {
+    headers['Content-Length'] = form.getLengthSync();
+  } catch {
+    // Unknown-length stream parts.
+  }
   const response = await client.post('/api/upload_attachment', form, {
-    headers: {
-      ...form.getHeaders(),
-    },
+    headers,
     timeout: 120000,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
   });
   const gcpPath = (response.data as { gcpPath?: string })?.gcpPath;
   if (!gcpPath) {

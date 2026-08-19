@@ -1228,7 +1228,7 @@ export class TestChimpReporter implements Reporter {
   private async drainAllPendingBuckets(): Promise<void> {
     while (this.pendingOperationsByJobId.size > 0) {
       const keys = [...this.pendingOperationsByJobId.keys()];
-      await Promise.all(keys.map((k) => this.drainPendingForJob(k)));
+      await Promise.allSettled(keys.map((k) => this.drainPendingForJob(k)));
     }
   }
 

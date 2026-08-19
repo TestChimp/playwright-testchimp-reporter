@@ -12,7 +12,7 @@ const TINY_PNG = Buffer.from(
   'base64'
 );
 
-function makeTestCase() {
+function makeTestCase(overrides = {}) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-reporter-'));
   const file = path.join(rootDir, 'tests', 'e2e', 'sample.spec.js');
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -32,11 +32,11 @@ function makeTestCase() {
     project: () => undefined,
   };
   return {
-    id: 'test-id-1',
-    title: 'sample test',
+    id: overrides.id || 'test-id-1',
+    title: overrides.title || 'sample test',
     retries: 0,
     location: { file, line: 1, column: 1 },
-    titlePath: () => ['sample.spec.js', 'sample test'],
+    titlePath: () => ['sample.spec.js', overrides.title || 'sample test'],
     parent: describeSuite,
     annotations: [],
     _rootDir: rootDir,
@@ -182,5 +182,56 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
       fallbackReport.durationMs,
       fallbackReport.completedAtMillis - fallbackReport.startedAtMillis
     );
+  });
+
+  it('failed screenshot upload still ingests that test and the rest of the batch', async () => {
+    const { TestChimpReporter } = require(reporterPath);
+    const { StepExecutionStatus } = require(path.join(__dirname, '..', 'dist', 'types.js'));
+    const failing = makeTestCase({ id: 'test-id-fail-upload', title: 'upload fails' });
+    const sibling = makeTestCase({ id: 'test-id-sibling', title: 'sibling still ingests' });
+    const screenshotPath = path.join(failing._rootDir, 'fail.png');
+    fs.writeFileSync(screenshotPath, TINY_PNG);
+
+    const ingested = [];
+    const reporter = new TestChimpReporter({
+      executionMode: 'ci',
+      captureScreenshots: true,
+      verbose: false,
+      testsFolder: 'tests',
+    });
+    reporter.onBegin(
+      { rootDir: failing._rootDir, projects: [] },
+      { tests: [failing, sibling], suites: [] }
+    );
+    reporter.apiClient = {
+      getBaseUrl: () => 'https://example.testchimp.invalid',
+      uploadAttachment: async () => {
+        throw new Error('truncated multipart');
+      },
+      ingestExecutionReport: async (report) => {
+        ingested.push(report.testName);
+        return { jobId: `job-${report.testName}`, testFound: true };
+      },
+      completeBatchInvocation: async () => ({ materialized: true }),
+    };
+
+    const seedFailingStep = (testCase) => {
+      reporter.onTestBegin(testCase, makeResult('passed'));
+      const execution = reporter.testExecutions.get(`${testCase.id}_attempt_0`);
+      execution.steps.push({
+        stepId: 'step_1',
+        description: 'expect visible',
+        status: StepExecutionStatus.FAILURE_STEP_EXECUTION,
+        screenshotPath: undefined,
+      });
+    };
+    seedFailingStep(failing);
+    seedFailingStep(sibling);
+
+    reporter.onTestEnd(failing, makeResult('failed', screenshotPath));
+    reporter.onTestEnd(sibling, makeResult('failed', screenshotPath));
+    await reporter.onEnd({ status: 'failed' });
+
+    assert.deepEqual(ingested.sort(), ['sibling still ingests', 'upload fails']);
   });
 });

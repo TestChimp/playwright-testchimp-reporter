@@ -1,5 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import FormData from 'form-data';
+import http from 'http';
+import https from 'https';
 import {
   IngestSmartTestExecutionReportResponse,
   SmartTestExecutionReport,
@@ -13,6 +15,28 @@ import type { ApiOperationInteraction } from './api-coverage/capture';
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 /** Cap for large payloads or server-heavy routes (platform test_end, ingest, journey_execution_end). Override with TESTCHIMP_LONG_REQUEST_TIMEOUT_MS. */
 const DEFAULT_LONG_REQUEST_TIMEOUT_MS = 600_000;
+
+/**
+ * JSON ingest/complete must not share Node's global keep-alive agent with multipart uploads.
+ * A truncated upload leaves that socket unusable; the next POST on the same connection can drop
+ * other tests in the same batch. Uploads keep their own pool (keep-alive on) so TLS is reused
+ * across screenshots without touching ingest sockets.
+ */
+const JSON_HTTP_AGENT = new http.Agent({ keepAlive: true, maxSockets: 50 });
+const JSON_HTTPS_AGENT = new https.Agent({ keepAlive: true, maxSockets: 50 });
+const UPLOAD_HTTP_AGENT = new http.Agent({ keepAlive: true, maxSockets: 16 });
+const UPLOAD_HTTPS_AGENT = new https.Agent({ keepAlive: true, maxSockets: 16 });
+
+/** Headers for Node `form-data` POSTs: boundary + known length (avoids chunked truncation). */
+function multipartHeaders(form: FormData): Record<string, string | number> {
+  const headers: Record<string, string | number> = { ...form.getHeaders() };
+  try {
+    headers['Content-Length'] = form.getLengthSync();
+  } catch {
+    // Unknown-length stream parts: let the adapter use chunked encoding.
+  }
+  return headers;
+}
 
 function parsePositiveTimeoutMs(raw: string | undefined, fallback: number): number {
   if (!raw?.trim()) return fallback;
@@ -49,6 +73,8 @@ function toCamelCase(obj: unknown): unknown {
  */
 export class TestChimpApiClient {
   private client: AxiosInstance;
+  /** Separate sockets from JSON ingest so a failed/truncated upload cannot poison the batch. */
+  private uploadClient: AxiosInstance;
   private apiKey: string;
   private projectId: string;
   private verbose: boolean;
@@ -71,8 +97,11 @@ export class TestChimpApiClient {
       DEFAULT_LONG_REQUEST_TIMEOUT_MS
     );
 
+    // Do not default Content-Type to application/json: that header is merged onto
+    // multipart uploads and Commons FileUpload then sees a truncated/invalid stream
+    // ("Stream ended unexpectedly"). JSON POSTs still get the type from axios when
+    // the body is a plain object.
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       'testchimp-api-key': apiKey,
     };
     const trimmedProject = projectId?.trim();
@@ -83,7 +112,16 @@ export class TestChimpApiClient {
     this.client = axios.create({
       baseURL: apiUrl,
       headers,
-      timeout: this.requestTimeoutMs
+      timeout: this.requestTimeoutMs,
+      httpAgent: JSON_HTTP_AGENT,
+      httpsAgent: JSON_HTTPS_AGENT,
+    });
+    this.uploadClient = axios.create({
+      baseURL: apiUrl,
+      headers,
+      timeout: this.requestTimeoutMs,
+      httpAgent: UPLOAD_HTTP_AGENT,
+      httpsAgent: UPLOAD_HTTPS_AGENT,
     });
   }
 
@@ -273,12 +311,11 @@ export class TestChimpApiClient {
           contentType,
         });
 
-        const response = await this.client.post('/api/upload_attachment', form, {
-          headers: {
-            // Let form-data set the correct multipart boundary & content type.
-            ...form.getHeaders(),
-          },
-          timeout: timeoutMs
+        const response = await this.uploadClient.post('/api/upload_attachment', form, {
+          headers: multipartHeaders(form),
+          timeout: timeoutMs,
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
         });
         const data = response.data;
 

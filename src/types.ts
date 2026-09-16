@@ -66,6 +66,8 @@ export interface SmartTestExecutionStep {
   wasRepaired?: boolean;
   pwStepCategory?: string;
   durationMs?: number;
+  /** Playwright TestStep.startTime as epoch milliseconds. */
+  startedAtMillis?: number;
   pwError?: PlaywrightError;
 }
 

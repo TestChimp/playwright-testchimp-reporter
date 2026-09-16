@@ -509,6 +509,7 @@ export class TestChimpReporter implements Reporter {
       error: step.error?.message,
       pwStepCategory: step.category,
       durationMs: step.duration,
+      startedAtMillis: step.startTime.getTime(),
       pwError: this.toPlaywrightError(step.error),
       wasRepaired: false,
       ...(exploreChimpScreenState ? { screenState: exploreChimpScreenState } : {})
@@ -609,6 +610,7 @@ export class TestChimpReporter implements Reporter {
         batchInvocationId: interaction.batchInvocationId ?? this.batchInvocationId,
         environment: interaction.environment ?? this.options.environment,
         testMode: interaction.testMode ?? ApiOperationTestMode.AUTOMATION,
+        retryCount: result.retry,
       }));
       await this.apiClient.ingestApiOperationInteractions(enriched);
     } catch (err) {

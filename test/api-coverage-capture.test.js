@@ -156,7 +156,9 @@ test('attachApiCoverageCapture captures JSON within body timeout', async () => {
     headers: () => ({}),
     postData: () => null,
   };
+  const beforeRequest = Date.now();
   handlers.request(req);
+  const afterRequest = Date.now();
   handlers.response({
     request: () => req,
     status: () => 200,
@@ -172,6 +174,8 @@ test('attachApiCoverageCapture captures JSON within body timeout', async () => {
   assert.equal(out[0].responsePayload?.kind, ApiPayloadKind.JSON);
   assert.equal(out[0].responsePayload?.jsonBody, '{"ok":true}');
   assert.equal(out[0].queryParams?.x, '1');
+  assert.ok(out[0].startedAtMillis >= beforeRequest);
+  assert.ok(out[0].startedAtMillis <= afterRequest);
 });
 
 test('attachApiCoverageCapture omits payload when body read hangs past timeout', async () => {

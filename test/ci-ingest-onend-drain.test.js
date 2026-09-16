@@ -184,6 +184,84 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
     );
   });
 
+  it('serializes the Playwright step start time', () => {
+    const { TestChimpReporter } = require(reporterPath);
+    const test = makeTestCase({ id: 'step-start-time' });
+    const reporter = new TestChimpReporter({
+      executionMode: 'ci',
+      captureScreenshots: false,
+      testsFolder: 'tests',
+    });
+    reporter.onBegin({ rootDir: test._rootDir, projects: [] }, { tests: [test], suites: [] });
+
+    const result = makeResult('passed');
+    const stepStartTime = new Date('2026-09-16T10:11:12.345Z');
+    reporter.onTestBegin(test, result);
+    reporter.onStepEnd(test, result, {
+      category: 'test.step',
+      title: 'call the API',
+      duration: 25,
+      startTime: stepStartTime,
+    });
+
+    const execution = reporter.testExecutions.get(`${test.id}_attempt_0`);
+    assert.equal(execution.steps[0].startedAtMillis, stepStartTime.getTime());
+  });
+
+  it('enriches API interactions with the Playwright retry count before ingest', async () => {
+    const { TestChimpReporter } = require(reporterPath);
+    const test = makeTestCase({ id: 'api-retry-count' });
+    const reporter = new TestChimpReporter({
+      executionMode: 'ci',
+      reportOnlyFinalAttempt: false,
+      captureScreenshots: false,
+      testsFolder: 'tests',
+    });
+    reporter.onBegin({ rootDir: test._rootDir, projects: [] }, { tests: [test], suites: [] });
+
+    let ingestedInteractions;
+    reporter.apiClient = {
+      getBaseUrl: () => 'https://example.testchimp.invalid',
+      ingestExecutionReport: async () => ({
+        jobId: 'job-api-retry',
+        testId: 'resolved-test-id',
+        testFound: true,
+      }),
+      ingestApiOperationInteractions: async (interactions) => {
+        ingestedInteractions = interactions;
+      },
+    };
+
+    const result = {
+      ...makeResult('passed'),
+      retry: 2,
+      attachments: [
+        {
+          name: 'testchimp-api-coverage',
+          contentType: 'application/json',
+          body: Buffer.from(JSON.stringify([
+            {
+              endpoint: '/v1/items',
+              httpMethod: 'POST',
+              startedAtMillis: 1_797_500_000_000,
+              requestPayload: { kind: 'OMITTED', contentType: 'multipart/form-data' },
+            },
+          ])),
+        },
+      ],
+    };
+    reporter.onTestBegin(test, result);
+    await reporter.onTestEnd(test, result);
+
+    assert.equal(ingestedInteractions.length, 1);
+    assert.equal(ingestedInteractions[0].retryCount, 2);
+    assert.equal(ingestedInteractions[0].startedAtMillis, 1_797_500_000_000);
+    assert.deepEqual(ingestedInteractions[0].requestPayload, {
+      kind: 'OMITTED',
+      contentType: 'multipart/form-data',
+    });
+  });
+
   it('failed screenshot upload still ingests that test and the rest of the batch', async () => {
     const { TestChimpReporter } = require(reporterPath);
     const { StepExecutionStatus } = require(path.join(__dirname, '..', 'dist', 'types.js'));

@@ -70,6 +70,10 @@ export interface ApiOperationInteractionPayload {
   responsePayload?: ApiPayload;
   environment?: string;
   responseTimeMs?: number;
+  /** Request event start time as epoch milliseconds. */
+  startedAtMillis?: number;
+  /** Zero-based Playwright retry index, populated by the reporter before ingest. */
+  retryCount?: number;
   /** ApiOperationTestMode enum name (JsonFormat). */
   testMode?: ApiOperationTestMode | string;
   /** ApiOperationInteractionType enum name (JsonFormat). */
@@ -577,8 +581,8 @@ export function attachApiCoverageCapture(
           return;
         }
         const status = response.status();
-        const start = starts.get(req as object) ?? Date.now();
-        const rt = Math.max(0, Date.now() - start);
+        const startedAtMillis = starts.get(req as object) ?? Date.now();
+        const rt = Math.max(0, Date.now() - startedAtMillis);
         const reqCt = req.headers()['content-type'];
         const resCt = response.headers()['content-type'];
         // Consume the marker: each Playwright Request has at most one response.
@@ -613,6 +617,7 @@ export function attachApiCoverageCapture(
           responsePayload,
           queryParams: parseQueryParams(url),
           responseTimeMs: rt,
+          startedAtMillis,
           testMode: ApiOperationTestMode.AUTOMATION,
           interactionType: mocked ? ApiOperationInteractionType.MOCKED : ApiOperationInteractionType.REAL,
         });

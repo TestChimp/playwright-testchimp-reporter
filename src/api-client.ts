@@ -237,12 +237,25 @@ export class TestChimpApiClient {
    * US-185: append-only API operation interaction ingest (no coverage computation client-side;
    * the backend matches interactions to operations/tests). Never throws — best-effort, logs on failure.
    */
-  async ingestApiOperationInteractions(interactions: ApiOperationInteraction[]): Promise<void> {
+  async ingestApiOperationInteractions(
+    interactions: ApiOperationInteraction[],
+    context?: {
+      testLocator?: {
+        folderPath: string[];
+        fileName: string;
+        testSuite: string[];
+        testName: string;
+      };
+      batchInvocationId?: string;
+      branchName?: string;
+      branchId?: number;
+    }
+  ): Promise<void> {
     if (!interactions.length) return;
     try {
       await this.client.post(
         '/api/ingest_api_operation_interactions',
-        { interactions },
+        { interactions, ...context },
         { timeout: this.longRequestTimeoutMs }
       );
       if (this.verbose) {

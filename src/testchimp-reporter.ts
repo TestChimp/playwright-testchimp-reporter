@@ -56,6 +56,7 @@ import {
   fromWireLocator,
   getSmartSmokeSelectionFilePath,
   loadRelatedTests,
+  locatorFromDerived,
   readSmartSmokeUseFromConfig,
   resolveSkipReasonFromAnnotations,
   resolveSmartSmokeConfig,
@@ -588,6 +589,7 @@ export class TestChimpReporter implements Reporter {
    * no page fixture used, or no matching traffic observed).
    */
   private async ingestApiCoverageIfPresent(
+    test: TestCase,
     result: TestResult,
     ids: { testId?: string; executionId?: string }
   ): Promise<void> {
@@ -607,12 +609,25 @@ export class TestChimpReporter implements Reporter {
         ...interaction,
         testId: interaction.testId ?? ids.testId,
         executionId: interaction.executionId ?? ids.executionId,
-        batchInvocationId: interaction.batchInvocationId ?? this.batchInvocationId,
         environment: interaction.environment ?? this.options.environment,
         testMode: interaction.testMode ?? ApiOperationTestMode.AUTOMATION,
         retryCount: result.retry,
       }));
-      await this.apiClient.ingestApiOperationInteractions(enriched);
+      const paths = derivePaths(test, this.testsFolder, this.config.rootDir, false);
+      const locator = locatorFromDerived(paths);
+      const branchIdRaw = getEnvVar('TESTCHIMP_BRANCH_ID', '');
+      const parsedBranchId = branchIdRaw ? Number.parseInt(branchIdRaw, 10) : undefined;
+      await this.apiClient.ingestApiOperationInteractions(enriched, {
+        testLocator: {
+          folderPath: Array.isArray(locator.folderPath) ? locator.folderPath : [],
+          fileName: locator.fileName || '',
+          testSuite: locator.testSuite || [],
+          testName: locator.testName || '',
+        },
+        batchInvocationId: this.batchInvocationId || undefined,
+        branchName: getBranchName() || undefined,
+        branchId: parsedBranchId !== undefined && !Number.isNaN(parsedBranchId) ? parsedBranchId : undefined,
+      });
     } catch (err) {
       console.error('[TestChimp] Failed to ingest API operation interactions (non-fatal):', err);
     }
@@ -650,7 +665,7 @@ export class TestChimpReporter implements Reporter {
           console.error(`[TestChimp] repair_test_end failed jobId=${jobId}:`, e);
         }
       }
-      await this.ingestApiCoverageIfPresent(result, {});
+      await this.ingestApiCoverageIfPresent(test, result, {});
       return;
     }
 
@@ -690,7 +705,7 @@ export class TestChimpReporter implements Reporter {
         }
       }
       // Coverage denorm requires testId; resolve from platform job manifest (not empty {}).
-      await this.ingestApiCoverageIfPresent(result, {
+      await this.ingestApiCoverageIfPresent(test, result, {
         testId: manifestHit?.testId,
         executionId: manifestHit?.jobId,
       });
@@ -751,14 +766,17 @@ export class TestChimpReporter implements Reporter {
           console.log(`[TestChimp] Auto-populated ${response.scenariosPopulated} scenario(s)`);
         }
       }
-      await this.ingestApiCoverageIfPresent(result, { testId: response.testId, executionId: response.jobId });
+      await this.ingestApiCoverageIfPresent(test, result, {
+        testId: response.testId,
+        executionId: response.jobId,
+      });
     } catch (error) {
       console.error(
         `[TestChimp] ingest_diag after_ingest_error baseUrl=${JSON.stringify(this.apiClient.getBaseUrl())} test=${JSON.stringify(test.title)}`,
         error
       );
       // Best-effort: still forward coverage even when the smarttest execution report failed to ingest.
-      await this.ingestApiCoverageIfPresent(result, {});
+      await this.ingestApiCoverageIfPresent(test, result, {});
     }
 
     // Cleanup (ExploreChimp journey_execution_end is invoked from onTestEnd finally).

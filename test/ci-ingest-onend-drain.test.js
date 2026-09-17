@@ -220,6 +220,7 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
     reporter.onBegin({ rootDir: test._rootDir, projects: [] }, { tests: [test], suites: [] });
 
     let ingestedInteractions;
+    let ingestContext;
     reporter.apiClient = {
       getBaseUrl: () => 'https://example.testchimp.invalid',
       ingestExecutionReport: async () => ({
@@ -227,8 +228,9 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
         testId: 'resolved-test-id',
         testFound: true,
       }),
-      ingestApiOperationInteractions: async (interactions) => {
+      ingestApiOperationInteractions: async (interactions, context) => {
         ingestedInteractions = interactions;
+        ingestContext = context;
       },
     };
 
@@ -260,6 +262,14 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
       kind: 'OMITTED',
       contentType: 'multipart/form-data',
     });
+    assert.deepEqual(ingestContext.testLocator, {
+      folderPath: ['e2e'],
+      fileName: 'sample.spec.js',
+      testSuite: [],
+      testName: 'sample test',
+    });
+    assert.equal(ingestContext.batchInvocationId, reporter.batchInvocationId);
+    assert.equal(ingestedInteractions[0].batchInvocationId, undefined);
   });
 
   it('failed screenshot upload still ingests that test and the rest of the batch', async () => {

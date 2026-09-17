@@ -285,6 +285,7 @@ export class TestChimpApiClient {
   async completeBatchInvocation(body: {
     batchInvocationId: string;
     status: number;
+    testRunId?: string;
   }): Promise<CompleteBatchInvocationResponse> {
     try {
       const response = await this.client.post('/api/complete_batch_invocation', body, {

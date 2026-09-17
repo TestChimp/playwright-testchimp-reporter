@@ -191,6 +191,8 @@ export interface TestChimpReporterOptions {
   testsFolder?: string;
   /** Override TESTCHIMP_RELEASE env var */
   release?: string;
+  /** Override TESTCHIMP_TEST_RUN_ID env var */
+  testRunId?: string;
   /** Override TESTCHIMP_ENV env var */
   environment?: string;
   /** Only report final retry attempt (default: true) */

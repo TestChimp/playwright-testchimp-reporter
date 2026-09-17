@@ -25,6 +25,7 @@
  * - TESTCHIMP_BACKEND_URL (optional): Control-plane host for ai-wright; SaaS featureservice* is rewritten to ingress* for CI ingest when INGRESS_URL is unset
  * - TESTCHIMP_TESTS_FOLDER (optional): Base folder for relative path calculation
  * - TESTCHIMP_RELEASE (optional): Release/version identifier
+ * - TESTCHIMP_TEST_RUN_ID (optional): Named test-run id for batch linkage
  * - TESTCHIMP_ENV (optional): Environment name (e.g., staging, prod)
  * - TESTCHIMP_EXECUTION_SOURCE (optional): CI | LOCAL_AGENT | CLOUD_AGENT | MANUAL — stamped on ingest
  *   (UI run source). Skill sets LOCAL_AGENT / CLOUD_AGENT; true pipelines set CI. If unset:

@@ -100,6 +100,7 @@ Set these so the reporter can talk to TestChimp (env vars override programmatic 
 | `TESTCHIMP_PROJECT_ID` | No | Legacy/optional; the backend resolves the project from the API key when omitted. |
 | `TESTCHIMP_TESTS_FOLDER` | No | Base folder for relative paths (default: `tests`). |
 | `TESTCHIMP_RELEASE` | No | Release/version identifier. |
+| `TESTCHIMP_TEST_RUN_ID` | No | Named test-run ID. Links the completed automation batch to that run; when `TESTCHIMP_RELEASE` is omitted, the backend derives the release from the test run. |
 | `TESTCHIMP_ENV` | No | Environment (e.g. `staging`, `prod`). |
 | `TESTCHIMP_EXECUTION_SOURCE` | No | Run source stamped on ingest: `CI`, `LOCAL_AGENT`, `CLOUD_AGENT`, or `MANUAL`. Skill/agent runs set `LOCAL_AGENT` / `CLOUD_AGENT`. True CI pipelines set `CI`. If unset: remote cloud-agent host (`COPILOT_USE_PLATFORM` / `COPILOT_WORKSPACE` / `CURSOR_AGENT_WORKER_ID`) → `CLOUD_AGENT`; local agent host (`CURSOR_AGENT`, Claude Code, …) → `LOCAL_AGENT`; else `CI=true`/`1` → `CI`; else `LOCAL_AGENT`. `CURSOR_AGENT` alone is the **local** Cursor IDE — not cloud. Not the same as `TESTCHIMP_EXECUTION_MODE` (ingest path). |
 | `TESTCHIMP_ENABLE_API_CAPTURE` | No | Set to `1`/`true`/`yes` to opt in to API operation capture + payload ingest (default **off**). |

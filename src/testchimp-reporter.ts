@@ -186,6 +186,7 @@ export class TestChimpReporter implements Reporter {
       projectId: options.projectId || '',
       testsFolder: options.testsFolder || '',
       release: options.release || '',
+      testRunId: options.testRunId || '',
       environment: options.environment || '',
       reportOnlyFinalAttempt: options.reportOnlyFinalAttempt ?? true,
       captureScreenshots: options.captureScreenshots ?? true,
@@ -217,8 +218,9 @@ export class TestChimpReporter implements Reporter {
             backendUrl: this.options.backendUrl,
           });
 
-    // Update options with env var values for release/environment
+    // Update options with env var values for release/test-run/environment
     this.options.release = getEnvVar('TESTCHIMP_RELEASE', this.options.release) || '';
+    this.options.testRunId = getEnvVar('TESTCHIMP_TEST_RUN_ID', this.options.testRunId) || '';
     this.options.environment = getEnvVar('TESTCHIMP_ENV', this.options.environment) || '';
 
     // In repair mode we allow reporting to scriptservice localhost without an API key.
@@ -804,6 +806,7 @@ export class TestChimpReporter implements Reporter {
           const completeResponse = await this.apiClient.completeBatchInvocation({
             batchInvocationId: this.batchInvocationId,
             status: batchStatus,
+            testRunId: this.options.testRunId || undefined,
           });
           const batchViewUrl = completeResponse.batchViewUrl?.trim();
           if (batchViewUrl) {

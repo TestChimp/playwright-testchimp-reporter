@@ -67,7 +67,13 @@ function makeResult(status, screenshotPath) {
 
 describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', () => {
   const savedEnv = {};
-  const envKeys = ['TESTCHIMP_API_KEY', 'TESTCHIMP_BACKEND_URL', 'TESTCHIMP_EXECUTION_MODE', 'EXPLORECHIMP_ENABLED'];
+  const envKeys = [
+    'TESTCHIMP_API_KEY',
+    'TESTCHIMP_BACKEND_URL',
+    'TESTCHIMP_EXECUTION_MODE',
+    'TESTCHIMP_TEST_RUN_ID',
+    'EXPLORECHIMP_ENABLED',
+  ];
 
   beforeEach(() => {
     for (const key of envKeys) {
@@ -76,6 +82,7 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
     process.env.TESTCHIMP_API_KEY = 'test-key-not-secret';
     process.env.TESTCHIMP_BACKEND_URL = 'https://example.testchimp.invalid';
     delete process.env.TESTCHIMP_EXECUTION_MODE;
+    delete process.env.TESTCHIMP_TEST_RUN_ID;
     delete process.env.EXPLORECHIMP_ENABLED;
     delete require.cache[require.resolve(reporterPath)];
   });
@@ -95,6 +102,7 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
 
     const order = [];
     let ingestedReport;
+    let completedBatch;
     let resolveUpload;
     const uploadStarted = new Promise((r) => {
       resolveUpload = r;
@@ -134,7 +142,8 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
         order.push('ingest');
         return { jobId: 'job-1', testFound: true };
       },
-      completeBatchInvocation: async () => {
+      completeBatchInvocation: async (body) => {
+        completedBatch = body;
         order.push('complete_batch');
         return { materialized: true };
       },
@@ -171,6 +180,7 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
       ['upload_start', 'upload_done', 'ingest', 'complete_batch']
     );
     assert.equal(ingestedReport.durationMs, result.duration);
+    assert.equal(completedBatch.testRunId, undefined);
 
     const fallbackExecution = { ...execution, startedAt: Date.now() - 123 };
     const fallbackReport = reporter.buildReport(
@@ -182,6 +192,35 @@ describe('CI ingest drained by onEnd (Playwright fire-and-forget onTestEnd)', ()
       fallbackReport.durationMs,
       fallbackReport.completedAtMillis - fallbackReport.startedAtMillis
     );
+  });
+
+  it('forwards TESTCHIMP_TEST_RUN_ID on batch completion with env precedence', async () => {
+    process.env.TESTCHIMP_TEST_RUN_ID = 'run-from-env';
+    const { TestChimpReporter } = require(reporterPath);
+    const test = makeTestCase({ id: 'named-test-run' });
+    const reporter = new TestChimpReporter({
+      executionMode: 'ci',
+      captureScreenshots: false,
+      testsFolder: 'tests',
+      testRunId: 'run-from-options',
+    });
+    reporter.onBegin(
+      { rootDir: test._rootDir, projects: [] },
+      { tests: [test], suites: [] }
+    );
+
+    let completedBatch;
+    reporter.apiClient = {
+      getBaseUrl: () => 'https://example.testchimp.invalid',
+      completeBatchInvocation: async (body) => {
+        completedBatch = body;
+        return { materialized: true };
+      },
+    };
+
+    await reporter.onEnd({ status: 'passed' });
+
+    assert.equal(completedBatch.testRunId, 'run-from-env');
   });
 
   it('serializes the Playwright step start time', () => {

@@ -39,6 +39,8 @@ Read more about TestChimps' TrueCoverage feature [here](https://docs.testchimp.i
 npm install @testchimp/playwright
 ```
 
+Requires Node.js `>=20.9.0` (since 0.3.0).
+
 Peer dependency: `@playwright/test` (e.g. `>=1.40.0`) for web projects, and `mobilewright` for mobile projects.
 
 Platform is determined per test from Mobilewright `projects[].use.platform` (`ios` / `android`; omitted = web), with fallback to `testInfo.annotations` (`device.platform`, Mobilewright 0.0.36+). Requires **mobilewright >= 0.0.37** for multi-project `installApps`. Pass `installTestChimp(base, { uiFixture: 'screen' })` when wrapping `@mobilewright/test`; default `page` for `@playwright/test` (web path never touches `device` fixtures).

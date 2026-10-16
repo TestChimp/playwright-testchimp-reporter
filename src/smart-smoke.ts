@@ -52,11 +52,12 @@ export interface ResolvedSmartSmokeConfig {
 
 export interface TestLocatorJson {
   folderPath?: string[] | string;
-  folder_path?: string[];
+  folder_path?: string[] | string;
   fileName?: string;
   file_name?: string;
-  testSuite?: string[];
-  test_suite?: string[];
+  /** Nested describe titles. Agents sometimes write a bare string — normalized to a one-element array. */
+  testSuite?: string[] | string;
+  test_suite?: string[] | string;
   testName?: string;
   test_name?: string;
 }
@@ -187,6 +188,21 @@ export function folderPathSegments(folderPath: string | string[] | undefined): s
   return norm.split('/').filter(Boolean);
 }
 
+/**
+ * Coerce testSuite / test_suite to string[].
+ * A bare string becomes a one-element array (do not split on `/` — describe titles may contain `/`).
+ */
+export function normalizeTestSuite(suite: string[] | string | undefined | null): string[] {
+  if (Array.isArray(suite)) {
+    return suite.map((s) => String(s ?? '').trim()).filter(Boolean);
+  }
+  if (typeof suite === 'string') {
+    const t = suite.trim();
+    return t ? [t] : [];
+  }
+  return [];
+}
+
 export function locatorFromDerived(paths: DerivedPaths): TestLocatorJson {
   return {
     folderPath: folderPathSegments(paths.folderPath),
@@ -203,7 +219,7 @@ export function normalizeLocator(raw: TestLocatorJson): TestLocatorJson {
   return {
     folderPath: folderPathSegments(folder),
     fileName: raw.file_name ?? raw.fileName ?? '',
-    testSuite: raw.test_suite ?? raw.testSuite ?? [],
+    testSuite: normalizeTestSuite(raw.test_suite ?? raw.testSuite),
     testName: raw.test_name ?? raw.testName ?? '',
   };
 }

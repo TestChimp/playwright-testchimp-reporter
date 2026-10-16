@@ -623,7 +623,7 @@ export class TestChimpReporter implements Reporter {
         testLocator: {
           folderPath: Array.isArray(locator.folderPath) ? locator.folderPath : [],
           fileName: locator.fileName || '',
-          testSuite: locator.testSuite || [],
+          testSuite: Array.isArray(locator.testSuite) ? locator.testSuite : [],
           testName: locator.testName || '',
         },
         batchInvocationId: this.batchInvocationId || undefined,

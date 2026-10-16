@@ -7,6 +7,8 @@ const {
   resolveSmartSmokeConfig,
   locatorKey,
   normalizeLocator,
+  normalizeTestSuite,
+  toWireLocator,
   unionLocators,
   resolveSkipReasonFromAnnotations,
 } = require('../dist/smart-smoke.js');
@@ -103,6 +105,43 @@ describe('smart-smoke locators', () => {
     assert.equal(locatorKey(a), locatorKey(b));
     const u = unionLocators([a, b], [c]);
     assert.equal(u.length, 2);
+  });
+
+  it('normalizeTestSuite wraps a bare string (does not split on /)', () => {
+    assert.deepEqual(normalizeTestSuite('My suite'), ['My suite']);
+    assert.deepEqual(normalizeTestSuite('Workflow MCP/CLI tools'), ['Workflow MCP/CLI tools']);
+    assert.deepEqual(normalizeTestSuite(['A', 'B']), ['A', 'B']);
+    assert.deepEqual(normalizeTestSuite(''), []);
+    assert.deepEqual(normalizeTestSuite(null), []);
+    assert.deepEqual(normalizeTestSuite(undefined), []);
+  });
+
+  it('normalizeLocator coerces string testSuite; preserves quotes and & in testName', () => {
+    const n = normalizeLocator({
+      folderPath: ['auth'],
+      fileName: 'export.spec.ts',
+      testSuite: 'Export flows',
+      testName: 'Export & Complete with "(edited)" title',
+    });
+    assert.deepEqual(n.testSuite, ['Export flows']);
+    assert.equal(n.testName, 'Export & Complete with "(edited)" title');
+
+    const wire = toWireLocator(n);
+    assert.deepEqual(wire.test_suite, ['Export flows']);
+    assert.equal(typeof wire.test_suite, 'object');
+    assert.ok(Array.isArray(wire.test_suite));
+    assert.equal(wire.test_name, 'Export & Complete with "(edited)" title');
+  });
+
+  it('toWireLocator never sends test_suite as a string', () => {
+    const wire = toWireLocator({
+      folderPath: 'a/b',
+      fileName: 'f.ts',
+      test_suite: 'Single describe',
+      test_name: 't1',
+    });
+    assert.deepEqual(wire.folder_path, ['a', 'b']);
+    assert.deepEqual(wire.test_suite, ['Single describe']);
   });
 });
 

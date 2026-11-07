@@ -184,6 +184,7 @@ For each test (or its final attempt when using retries), the reporter sends a **
   - **Status**: Completed, Failed, or Unknown (mapped from Playwright status).
   - **Error**: Top-level test error message if failed.
   - **Screenshots**: For failing steps, when `captureScreenshots` is true and Playwright has attached screenshots (e.g. `screenshot: 'only-on-failure'`).
+  - **Video**: When Playwright has a video attachment (enable `use.video`, e.g. `{ mode: 'on', size: { width: 800, height: 450 } }`). Uploaded to GCS; path stamped as `jobDetail.videoGcsPath`. Oversized videos are skipped (`TESTCHIMP_VIDEO_MAX_BYTES`, default 50MB).
 
 Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt is reported.
 
@@ -211,6 +212,9 @@ Retries are tracked; with `reportOnlyFinalAttempt: true` only the last attempt i
 
 - **No screenshots on failure**  
   Enable screenshot capture in Playwright (e.g. `use: { screenshot: 'only-on-failure' }`). The reporter only attaches existing attachments to failing steps.
+
+- **No video on the execution page**  
+  Enable Playwright video capture (scaffold default: `video: { mode: 'on', size: { width: 800, height: 450 } }`). The reporter uploads existing video attachments; it does not start recording itself. Videos older than the project retention window (default 14 days) are deleted by a daily cleanup job.
 
 - **RUM events not linked to tests / missing `ci_test_info` (mobile)**  
   Use `export const test = installTestChimp(base, { uiFixture: 'screen' })` from a Mobilewright fixtures barrel and import `test` from there. Set `use.platform` on Mobilewright projects and handle `testchimp-rum://truecoverage/...` in the app (`TestChimpRum.handleAutomationURL` on iOS, `TestChimpRum.handleAutomationUri` on Android).  

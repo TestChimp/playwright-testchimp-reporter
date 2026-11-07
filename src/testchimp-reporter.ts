@@ -127,6 +127,10 @@ export class TestChimpReporter implements Reporter {
   private static readonly DEFAULT_TRACE_MAX_BYTES = 25 * 1024 * 1024;
   private static readonly DEFAULT_TRACE_UPLOAD_TIMEOUT_MS = 120_000;
   private static readonly DEFAULT_TRACE_UPLOAD_RETRIES = 2;
+  /** Max Playwright video size we'll POST as multipart to `/api/upload_attachment`. */
+  private static readonly DEFAULT_VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+  private static readonly DEFAULT_VIDEO_UPLOAD_TIMEOUT_MS = 180_000;
+  private static readonly DEFAULT_VIDEO_UPLOAD_RETRIES = 2;
   private config!: FullConfig;
   private options: Required<TestChimpReporterOptions>;
   private apiClient: TestChimpApiClient | null = null;
@@ -738,6 +742,10 @@ export class TestChimpReporter implements Reporter {
     if (traceGcsPath) {
       report.jobDetail.traceGcsPath = traceGcsPath;
     }
+    const videoGcsPath = await this.uploadVideoAttachmentIfPresent(result.attachments);
+    if (videoGcsPath) {
+      report.jobDetail.videoGcsPath = videoGcsPath;
+    }
 
     // Log report details
     console.log(`[TestChimp] Preparing to send report for test: ${test.title}`);
@@ -1101,6 +1109,14 @@ export class TestChimpReporter implements Reporter {
           console.log(`[TestChimp] platform/test_end pre-send: trace upload done jobId=${jobId} traceGcsPath=${traceGcsPath}`);
         } else {
           console.log(`[TestChimp] platform/test_end pre-send: no trace uploaded jobId=${jobId}`);
+        }
+        console.log(`[TestChimp] platform/test_end pre-send: uploading video (if present) jobId=${jobId}`);
+        const videoGcsPath = await this.uploadVideoAttachmentIfPresent(result.attachments);
+        if (videoGcsPath) {
+          jobDetail.videoGcsPath = videoGcsPath;
+          console.log(`[TestChimp] platform/test_end pre-send: video upload done jobId=${jobId} videoGcsPath=${videoGcsPath}`);
+        } else {
+          console.log(`[TestChimp] platform/test_end pre-send: no video uploaded jobId=${jobId}`);
         }
       } catch (prepError) {
         console.error(`[TestChimp] platform/test_end pre-send failed; continuing with fallback payload jobId=${jobId}:`, prepError);
@@ -1482,6 +1498,15 @@ export class TestChimpReporter implements Reporter {
     return TestChimpReporter.DEFAULT_TRACE_MAX_BYTES;
   }
 
+  private getVideoMaxBytes(): number {
+    const raw = getEnvVar('TESTCHIMP_VIDEO_MAX_BYTES', '') || '';
+    const parsed = raw ? parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+    return TestChimpReporter.DEFAULT_VIDEO_MAX_BYTES;
+  }
+
   private isTraceAttachment(attachment: TestResult['attachments'][number]): boolean {
     const name = (attachment.name || '').toLowerCase();
     const contentType = (attachment.contentType || '').toLowerCase();
@@ -1490,6 +1515,18 @@ export class TestChimpReporter implements Reporter {
       contentType.includes('zip') ||
       name.includes('trace') ||
       filePath.endsWith('.zip')
+    );
+  }
+
+  private isVideoAttachment(attachment: TestResult['attachments'][number]): boolean {
+    const name = (attachment.name || '').toLowerCase();
+    const contentType = (attachment.contentType || '').toLowerCase();
+    const filePath = (attachment.path || '').toLowerCase();
+    return (
+      contentType.startsWith('video/') ||
+      name === 'video' ||
+      filePath.endsWith('.webm') ||
+      filePath.endsWith('.mp4')
     );
   }
 
@@ -1543,6 +1580,62 @@ export class TestChimpReporter implements Reporter {
     } catch (error) {
       // Non-blocking by design: test execution should still be reported.
       console.error('[TestChimp] Trace upload failed (continuing without trace):', error);
+      return undefined;
+    }
+  }
+
+  private async uploadVideoAttachmentIfPresent(attachments: TestResult['attachments']): Promise<string | undefined> {
+    if (!this.apiClient) {
+      return undefined;
+    }
+
+    const videoAttachment = [...attachments].reverse().find((a) => this.isVideoAttachment(a));
+    if (!videoAttachment) {
+      return undefined;
+    }
+
+    let videoBuffer: Buffer | null = null;
+    try {
+      if (videoAttachment.path) {
+        videoBuffer = fs.readFileSync(videoAttachment.path);
+      } else if (videoAttachment.body) {
+        videoBuffer = Buffer.from(videoAttachment.body);
+      }
+    } catch (error) {
+      console.error('[TestChimp] Failed to read video attachment:', error);
+      return undefined;
+    }
+
+    if (!videoBuffer || videoBuffer.length === 0) {
+      console.warn('[TestChimp] Video attachment is empty; skipping upload');
+      return undefined;
+    }
+
+    const maxBytes = this.getVideoMaxBytes();
+    if (videoBuffer.length > maxBytes) {
+      console.warn(
+        `[TestChimp] Video attachment too large (${videoBuffer.length} bytes > ${maxBytes} bytes); skipping upload`
+      );
+      return undefined;
+    }
+
+    const contentType = videoAttachment.contentType || 'video/webm';
+    const filename = videoAttachment.path
+      ? path.basename(videoAttachment.path)
+      : `${(videoAttachment.name || 'video').replace(/[^a-zA-Z0-9._-]/g, '_')}.webm`;
+    try {
+      const uploadResp = await this.apiClient.uploadAttachment(videoBuffer, contentType, {
+        filename,
+        timeoutMs: TestChimpReporter.DEFAULT_VIDEO_UPLOAD_TIMEOUT_MS,
+        maxRetries: TestChimpReporter.DEFAULT_VIDEO_UPLOAD_RETRIES
+      });
+      if (this.options.verbose) {
+        console.log(`[TestChimp] Video uploaded (${videoBuffer.length} bytes): ${uploadResp.gcpPath}`);
+      }
+      return uploadResp.gcpPath;
+    } catch (error) {
+      // Non-blocking by design: test execution should still be reported.
+      console.error('[TestChimp] Video upload failed (continuing without video):', error);
       return undefined;
     }
   }

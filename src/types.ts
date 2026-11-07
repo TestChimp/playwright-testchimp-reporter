@@ -111,6 +111,8 @@ export interface SmartTestExecutionJobDetail {
   retryAttemptLogs?: RetryAttemptLog[];
   pwError?: PlaywrightError;
   traceGcsPath?: string;
+  /** Playwright video recording GCS path (explore-snaps relative). */
+  videoGcsPath?: string;
   gitCommitSha?: string;
   /** Playwright annotations (type + description), including scenario links. */
   annotations?: TestAnnotation[];
